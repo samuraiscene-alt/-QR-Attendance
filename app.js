@@ -438,7 +438,7 @@
       phone: row.participants?.phone_last4 || '',
       status:
         row.travel_mode === 'individual' ? 'individual' :
-        row.attendance_status === 'checked' ? 'present' :
+        row.attendance_status === 'checked_in' ? 'present' :
         'unknown',
       checkedAt: row.checked_at
     }));
@@ -581,7 +581,7 @@
         : next === 'present'
         ? {
             travel_mode:'bus',
-            attendance_status:'checked',
+            attendance_status:'checked_in',
             checked_at:new Date().toISOString(),
             check_source:'manual'
           }

@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v8-diagnostic-20260828';
+const CACHE='qr-attendance-v9-fixed-20260828';
 const ASSETS=[
   './',
   './index.html',
