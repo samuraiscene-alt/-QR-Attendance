@@ -599,7 +599,7 @@
 
     if (error) {
       console.error(error);
-      toast('상태 변경에 실패했습니다.');
+      toast(`오류 ${error.code || ''} · ${error.message || '상태 변경 실패'}${error.details ? ' · ' + error.details : ''}`);
       return;
     }
 
