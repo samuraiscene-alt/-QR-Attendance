@@ -310,6 +310,97 @@
     b.textContent = '로그아웃';
     b.addEventListener('click', logout);
     settingsCard.appendChild(b);
+
+    if (!$('#changePasswordButton')) {
+      const p = document.createElement('button');
+      p.id = 'changePasswordButton';
+      p.className = 'logout-button';
+      p.type = 'button';
+      p.textContent = '비밀번호 변경';
+      p.style.cssText = 'border-color:#cceee9;background:#f4fffd;color:#159f93;margin-top:10px;';
+      p.addEventListener('click', openPasswordChange);
+      settingsCard.insertBefore(p, b);
+    }
+  }
+
+  function openPasswordChange() {
+    let dialog = $('#changePasswordDialog');
+
+    if (!dialog) {
+      dialog = document.createElement('dialog');
+      dialog.id = 'changePasswordDialog';
+      dialog.style.cssText = 'width:min(calc(100% - 36px),420px);border:0;border-radius:24px;padding:0;box-shadow:0 20px 70px rgba(0,0,0,.2);';
+      dialog.innerHTML = `
+        <form id="changePasswordForm" style="padding:26px 22px;background:#fff;">
+          <h2 style="margin:0 0 8px;font-size:24px;">비밀번호 변경</h2>
+          <p style="margin:0 0 20px;color:#7b8590;font-size:14px;">새 관리자 비밀번호를 입력하세요.</p>
+
+          <label style="display:block;font-weight:800;margin:14px 0 7px;">새 비밀번호</label>
+          <input id="settingsNewPassword" type="password" autocomplete="new-password" minlength="8" required
+            style="box-sizing:border-box;width:100%;height:52px;border:1px solid #dfe7e9;border-radius:15px;padding:0 14px;font-size:16px;">
+
+          <label style="display:block;font-weight:800;margin:16px 0 7px;">새 비밀번호 확인</label>
+          <input id="settingsNewPasswordConfirm" type="password" autocomplete="new-password" minlength="8" required
+            style="box-sizing:border-box;width:100%;height:52px;border:1px solid #dfe7e9;border-radius:15px;padding:0 14px;font-size:16px;">
+
+          <div id="settingsPasswordMessage" style="min-height:22px;margin:10px 0 4px;color:#e44c51;font-size:13px;font-weight:700;"></div>
+
+          <button id="settingsPasswordSave" type="submit" class="primary-button" style="width:100%;margin-top:4px;">비밀번호 저장</button>
+          <button id="settingsPasswordCancel" type="button"
+            style="width:100%;height:50px;border:0;background:transparent;color:#7b8590;font-weight:800;margin-top:8px;">취소</button>
+        </form>`;
+      document.body.appendChild(dialog);
+
+      $('#changePasswordForm').addEventListener('submit', savePasswordFromSettings);
+      $('#settingsPasswordCancel').addEventListener('click', () => dialog.close());
+    }
+
+    $('#changePasswordForm')?.reset();
+    const m = $('#settingsPasswordMessage');
+    if (m) m.textContent = '';
+    dialog.showModal();
+  }
+
+  async function savePasswordFromSettings(e) {
+    e.preventDefault();
+
+    const p1 = $('#settingsNewPassword').value;
+    const p2 = $('#settingsNewPasswordConfirm').value;
+    const message = $('#settingsPasswordMessage');
+    const button = $('#settingsPasswordSave');
+
+    message.style.color = '#e44c51';
+    message.textContent = '';
+
+    if (p1.length < 8) {
+      message.textContent = '비밀번호는 8자 이상으로 입력해주세요.';
+      return;
+    }
+
+    if (p1 !== p2) {
+      message.textContent = '두 비밀번호가 서로 다릅니다.';
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = '저장 중…';
+
+    const { error } = await sb.auth.updateUser({ password: p1 });
+
+    button.disabled = false;
+    button.textContent = '비밀번호 저장';
+
+    if (error) {
+      console.error(error);
+      message.textContent = `변경 실패: ${error.message || '다시 시도해주세요.'}`;
+      return;
+    }
+
+    message.style.color = '#159f93';
+    message.textContent = '비밀번호가 변경되었습니다.';
+    toast('비밀번호 변경 완료');
+
+    setTimeout(() => $('#changePasswordDialog')?.close(), 900);
   }
 
   async function loadLatestEvent() {
