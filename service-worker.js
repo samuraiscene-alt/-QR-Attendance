@@ -1,7 +1,8 @@
-const CACHE='qr-attendance-v9-fixed-20260828';
+const CACHE='qr-attendance-v10-real-qr-20260829';
 const ASSETS=[
   './',
   './index.html',
+  './checkin.html',
   './style.css',
   './app.js',
   './manifest.json',

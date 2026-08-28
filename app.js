@@ -36,7 +36,8 @@
     people: [],
     filter: 'all',
     search: '',
-    channel: null
+    channel: null,
+    qrToken: null
   };
 
   function ensureLoginUI() {
@@ -281,6 +282,7 @@
       installLogout();
       await loadLatestEvent();
       await loadPeople();
+      await loadGatheringQr();
       subscribeRealtime();
       renderAll();
     } catch (e) {
@@ -416,6 +418,114 @@
     state.event = data?.[0] || null;
   }
 
+
+  async function loadGatheringQr() {
+    state.qrToken = null;
+    if (!state.event) return;
+
+    const now = new Date().toISOString();
+    const { data, error } = await sb
+      .from('qr_tokens')
+      .select('id,event_id,kind,token,is_active,valid_from,valid_until,created_at')
+      .eq('event_id', state.event.id)
+      .eq('kind', 'gathering')
+      .eq('is_active', true)
+      .gte('valid_until', now)
+      .order('created_at', { ascending:false })
+      .limit(1);
+
+    if (error) {
+      console.error('QR load error:', error);
+      return;
+    }
+
+    state.qrToken = data?.[0] || null;
+  }
+
+  function checkinUrl(token) {
+    const url = new URL('checkin.html', location.href);
+    url.searchParams.set('t', token);
+    return url.toString();
+  }
+
+  function renderQr() {
+    const qrBox = $('.fake-qr');
+    const qrPanel = $('.qr-panel');
+    const pill = $('[data-screen="qr"] .pill');
+    if (!qrBox || !qrPanel) return;
+
+    const desc = qrPanel.querySelector('p');
+    const startBtn = $('#demoStart');
+
+    if (!state.qrToken?.token) {
+      if (pill) pill.textContent = '준비 전';
+      if (desc) desc.textContent = '행사 시작을 누르면 이 행사 전용 QR이 생성됩니다.';
+      if (startBtn) startBtn.textContent = '행사 시작';
+      return;
+    }
+
+    const target = checkinUrl(state.qrToken.token);
+    const qrImage =
+      'https://quickchart.io/qr?size=320&margin=2&text=' +
+      encodeURIComponent(target);
+
+    qrBox.innerHTML = '';
+    qrBox.style.cssText =
+      'width:260px;height:260px;margin:0 auto 22px;background:#fff;border-radius:22px;padding:12px;box-sizing:border-box;display:grid;place-items:center;';
+    const img = document.createElement('img');
+    img.src = qrImage;
+    img.alt = '집결지 출석 QR';
+    img.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block;';
+    qrBox.appendChild(img);
+
+    if (pill) pill.textContent = '실제 QR';
+    if (desc) {
+      const until = state.qrToken.valid_until
+        ? new Date(state.qrToken.valid_until).toLocaleString('ko-KR', {
+            month:'numeric', day:'numeric', hour:'numeric', minute:'2-digit'
+          })
+        : '';
+      desc.textContent = until
+        ? `이 행사 전용 QR입니다. ${until}까지 유효합니다.`
+        : '이 행사 전용 QR입니다.';
+    }
+    if (startBtn) startBtn.textContent = 'QR 새로고침';
+  }
+
+  async function startEventQr() {
+    if (!state.event) {
+      toast('먼저 행사를 등록해주세요.');
+      return;
+    }
+
+    if (state.qrToken?.token) {
+      renderQr();
+      toast('출석 QR 준비 완료');
+      return;
+    }
+
+    const validUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await sb
+      .from('qr_tokens')
+      .insert({
+        event_id: state.event.id,
+        kind: 'gathering',
+        valid_until: validUntil
+      })
+      .select('id,event_id,kind,token,is_active,valid_from,valid_until,created_at')
+      .single();
+
+    if (error) {
+      console.error('QR create error:', error);
+      toast(`QR 생성 실패 · ${error.message || error.code || '확인 필요'}`);
+      return;
+    }
+
+    state.qrToken = data;
+    renderQr();
+    toast('행사 전용 QR 생성 완료');
+  }
+
   async function loadPeople() {
     if (!state.event) {
       state.people = [];
@@ -467,6 +577,7 @@
     renderStats();
     renderPeople();
     renderStatus();
+    renderQr();
   }
 
   function statusLabel(s) {
@@ -721,9 +832,7 @@
     $('#sheetButton')?.addEventListener('click', () => toast('Excel · Numbers · Sheets 연결은 다음 단계입니다.'));
     $('#proxyButton')?.addEventListener('click', () => toast('대리 QR은 행사 QR 기능과 함께 연결합니다.'));
     $('#demoShare')?.addEventListener('click', () => toast('대리 QR 공유는 다음 단계에서 활성화합니다.'));
-    $('#demoStart')?.addEventListener('click', () =>
-      toast(state.event ? '실제 행사 QR 생성은 다음 단계입니다.' : '먼저 행사를 등록해주세요.')
-    );
+    $('#demoStart')?.addEventListener('click', startEventQr);
   }
 
   function go(screen) {

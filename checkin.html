@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7fbfb">
+  <title>출석 확인</title>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#fff,#f2fbf9);font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;color:#172126}
+    main{min-height:100vh;display:grid;place-items:center;padding:28px}
+    .card{width:min(100%,430px);background:#fff;border:1px solid #e5eeee;border-radius:28px;padding:30px 22px;box-shadow:0 18px 55px rgba(21,44,52,.11);text-align:center}
+    .mark{width:82px;height:82px;border-radius:24px;background:#28c9b8;color:white;font-size:42px;font-weight:900;display:grid;place-items:center;margin:0 auto 20px}
+    h1{font-size:28px;margin:0 0 10px}
+    p{font-size:15px;line-height:1.6;color:#718087;margin:0}
+    .ok{margin-top:24px;padding:16px;border-radius:18px;background:#effbf9;color:#168f84;font-weight:800}
+    .bad{background:#fff2f2;color:#d94d55}
+  </style>
+</head>
+<body>
+<main>
+  <section class="card">
+    <div class="mark">✓</div>
+    <h1>출석 확인</h1>
+    <p id="message">QR 정보를 확인하고 있습니다.</p>
+    <div class="ok" id="status">잠시만 기다려주세요.</div>
+  </section>
+</main>
+<script>
+  const token = new URLSearchParams(location.search).get('t');
+  const msg = document.getElementById('message');
+  const status = document.getElementById('status');
+  if (token) {
+    msg.textContent = '행사 전용 QR을 정상적으로 읽었습니다.';
+    status.textContent = 'QR 연결 성공 · 본인 확인 기능은 다음 단계에서 연결합니다.';
+  } else {
+    msg.textContent = '유효한 QR 정보가 없습니다.';
+    status.textContent = 'QR을 다시 스캔해주세요.';
+    status.classList.add('bad');
+  }
+</script>
+</body>
+</html>
