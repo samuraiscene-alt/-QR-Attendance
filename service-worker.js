@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v2-20260828';
+const CACHE='qr-attendance-v3-password-recovery-20260828';
 const ASSETS=[
   './','./index.html','./style.css','./app.js','./supabase-config.js','./manifest.json',
   './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'

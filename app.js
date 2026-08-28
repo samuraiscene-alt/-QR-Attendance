@@ -39,6 +39,8 @@
     channel: null
   };
 
+  let recoveryActive = false;
+
   function ensureLoginUI() {
     if ($('#authGate')) return;
     const gate = document.createElement('div');
@@ -53,26 +55,47 @@
           <label>비밀번호<input id="loginPassword" type="password" autocomplete="current-password" required></label>
           <button class="primary-button" type="submit" id="loginButton">로그인</button>
         </form>
+        <button class="auth-link-button" type="button" id="forgotPasswordButton">비밀번호를 잊으셨나요?</button>
         <div class="auth-message" id="authMessage"></div>
       </div>`;
     document.body.appendChild(gate);
 
+    const recovery = document.createElement('div');
+    recovery.id = 'recoveryGate';
+    recovery.hidden = true;
+    recovery.innerHTML = `
+      <div class="auth-card">
+        <img src="icons/apple-touch-icon.png" class="auth-icon" alt="">
+        <h2>새 비밀번호 설정</h2>
+        <p>새로 사용할 관리자 비밀번호를 입력하세요.</p>
+        <form id="recoveryForm">
+          <label>새 비밀번호<input id="newPassword" type="password" autocomplete="new-password" minlength="6" required></label>
+          <label>비밀번호 확인<input id="newPasswordConfirm" type="password" autocomplete="new-password" minlength="6" required></label>
+          <button class="primary-button" type="submit" id="recoveryButton">비밀번호 변경</button>
+        </form>
+        <div class="auth-message" id="recoveryMessage"></div>
+      </div>`;
+    document.body.appendChild(recovery);
+
     const style = document.createElement('style');
     style.textContent = `
-      #authGate{position:fixed;inset:0;z-index:999;background:linear-gradient(180deg,#fff,#f2fbf9);display:grid;place-items:center;padding:24px}
-      #authGate[hidden]{display:none}
+      #authGate,#recoveryGate{position:fixed;inset:0;z-index:999;background:linear-gradient(180deg,#fff,#f2fbf9);display:grid;place-items:center;padding:24px}
+      #authGate[hidden],#recoveryGate[hidden]{display:none}
       .auth-card{width:min(100%,420px);background:#fff;border:1px solid #e8edef;border-radius:28px;padding:28px 22px;box-shadow:0 18px 55px rgba(21,44,52,.12);text-align:center}
       .auth-icon{width:78px;height:78px;border-radius:22px;box-shadow:0 8px 22px rgba(12,142,129,.16)}
       .auth-card h2{font-size:26px;margin:18px 0 7px}.auth-card>p{color:#7b8590;font-size:14px;margin:0 0 22px}
       .auth-card label{display:block;text-align:left;font-size:13px;font-weight:800;margin:14px 0}
-      .auth-card input{display:block;width:100%;height:50px;border:1px solid #e3e9eb;border-radius:15px;margin-top:7px;padding:0 14px;font-size:16px;outline:none}
+      .auth-card input{display:block;width:100%;height:50px;border:1px solid #e3e9eb;border-radius:15px;margin-top:7px;padding:0 14px;font-size:16px;outline:none;box-sizing:border-box}
       .auth-message{min-height:20px;margin-top:12px;font-size:13px;color:#e44c51}
+      .auth-link-button{border:0;background:transparent;color:#168f84;font-size:14px;font-weight:800;padding:15px 8px 2px;cursor:pointer}
       .logout-button{width:100%;min-height:48px;border:1px solid #ffd7d9;background:#fff6f6;color:#e44c51;border-radius:15px;font-weight:800;margin-top:10px}
       .empty-state{padding:24px 16px;text-align:center;color:#7b8590;background:#fff;border:1px solid #e8edef;border-radius:19px}
     `;
     document.head.appendChild(style);
 
     $('#loginForm').addEventListener('submit', login);
+    $('#forgotPasswordButton').addEventListener('click', requestPasswordReset);
+    $('#recoveryForm').addEventListener('submit', updateRecoveredPassword);
   }
 
   async function login(e) {
@@ -92,6 +115,94 @@
     button.disabled = false; button.textContent = '로그인';
   }
 
+  async function requestPasswordReset() {
+    if (!sb) return;
+    const emailInput = $('#loginEmail');
+    const message = $('#authMessage');
+    const email = emailInput?.value.trim() || '';
+    if (!email) {
+      message.textContent = '먼저 이메일을 입력해주세요.';
+      emailInput?.focus();
+      return;
+    }
+
+    const button = $('#forgotPasswordButton');
+    button.disabled = true;
+    button.textContent = '복구 메일 보내는 중…';
+    message.textContent = '';
+
+    const redirectTo = `${window.location.origin}${window.location.pathname}`;
+    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo });
+
+    button.disabled = false;
+    button.textContent = '비밀번호를 잊으셨나요?';
+
+    if (error) {
+      console.error(error);
+      if ((error.message || '').toLowerCase().includes('rate limit')) {
+        message.textContent = '복구 메일 요청이 많습니다. 잠시 후 다시 시도해주세요.';
+      } else {
+        message.textContent = '복구 메일 발송에 실패했습니다. 이메일을 확인해주세요.';
+      }
+      return;
+    }
+
+    message.style.color = '#168f84';
+    message.textContent = '비밀번호 복구 메일을 보냈습니다. 메일함을 확인해주세요.';
+  }
+
+  function showRecoveryUI() {
+    recoveryActive = true;
+    if ($('#authGate')) $('#authGate').hidden = true;
+    if ($('#recoveryGate')) $('#recoveryGate').hidden = false;
+    setTimeout(() => $('#newPassword')?.focus(), 100);
+  }
+
+  async function updateRecoveredPassword(e) {
+    e.preventDefault();
+    if (!sb) return;
+    const password = $('#newPassword').value;
+    const confirm = $('#newPasswordConfirm').value;
+    const message = $('#recoveryMessage');
+    const button = $('#recoveryButton');
+
+    message.style.color = '#e44c51';
+    message.textContent = '';
+
+    if (password.length < 6) {
+      message.textContent = '비밀번호는 6자 이상으로 입력해주세요.';
+      return;
+    }
+    if (password !== confirm) {
+      message.textContent = '두 비밀번호가 일치하지 않습니다.';
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = '변경 중…';
+    const { error } = await sb.auth.updateUser({ password });
+    if (error) {
+      console.error(error);
+      message.textContent = '비밀번호 변경에 실패했습니다. 복구 링크를 다시 확인해주세요.';
+      button.disabled = false;
+      button.textContent = '비밀번호 변경';
+      return;
+    }
+
+    message.style.color = '#168f84';
+    message.textContent = '비밀번호가 변경되었습니다. 새 비밀번호로 로그인해주세요.';
+    button.textContent = '변경 완료';
+
+    await sb.auth.signOut();
+    recoveryActive = false;
+    $('#recoveryGate').hidden = true;
+    $('#authGate').hidden = false;
+    $('#loginPassword').value = '';
+    const loginMessage = $('#authMessage');
+    loginMessage.style.color = '#168f84';
+    loginMessage.textContent = '비밀번호 변경 완료. 새 비밀번호로 로그인해주세요.';
+  }
+
   async function logout() {
     if (sb) await sb.auth.signOut();
   }
@@ -99,9 +210,10 @@
   async function onSession(session) {
     state.user = session?.user || null;
     if (!state.user) {
-      $('#authGate').hidden = false;
+      if (!recoveryActive) $('#authGate').hidden = false;
       return;
     }
+    if (recoveryActive) return;
     $('#authGate').hidden = true;
     await loadWorkspace();
   }
@@ -349,9 +461,19 @@
       $('#authMessage').textContent = 'Supabase 연결 설정을 확인해주세요.';
       return;
     }
+
+    // PASSWORD_RECOVERY 이벤트를 먼저 듣고 새 비밀번호 화면으로 전환한다.
+    sb.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        showRecoveryUI();
+        return;
+      }
+      setTimeout(() => onSession(session), 0);
+    });
+
     const { data } = await sb.auth.getSession();
     await onSession(data.session);
-    sb.auth.onAuthStateChange((_event, session) => setTimeout(() => onSession(session), 0));
+
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('./service-worker.js').catch(console.error);
     }
