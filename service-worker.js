@@ -1,7 +1,14 @@
-const CACHE='qr-attendance-v4-password-recovery-20260828';
+const CACHE='qr-attendance-v5-integrated-20260828';
 const ASSETS=[
-  './','./index.html','./style.css','./app.js','./manifest.json','./supabase-config.js',
-  './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'
+  './',
+  './index.html',
+  './style.css',
+  './app.js',
+  './manifest.json',
+  './supabase-config.js',
+  './icons/apple-touch-icon.png',
+  './icons/icon-192.png',
+  './icons/icon-512.png'
 ];
 
 self.addEventListener('install', event => {
@@ -19,6 +26,8 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
+  if (event.request.url.includes('supabase.co') || event.request.url.includes('cdn.jsdelivr.net')) return;
+
   event.respondWith(
     fetch(event.request)
       .then(response => {
