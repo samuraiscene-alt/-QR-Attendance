@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f7fbfb" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="출석 체크" />
+  <title>QR 자동 출석부</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-row">
+        <img src="icons/apple-touch-icon.png" class="app-icon" alt="출석 체크 아이콘" />
+        <div class="brand-copy">
+          <h1>출석 체크</h1>
+          <p>QR 자동 출석부</p>
+        </div>
+        <button class="icon-button" id="notificationButton" aria-label="알림">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
+          <span class="notice-dot"></span>
+        </button>
+      </div>
+    </header>
+
+    <main id="appMain">
+      <section class="screen active" data-screen="home">
+        <div class="welcome-card">
+          <div>
+            <strong>안녕하세요, 관리자님!</strong>
+            <p>오늘도 스마트한 출석 관리를 시작해요.</p>
+          </div>
+          <div class="welcome-ill" aria-hidden="true">✓</div>
+        </div>
+
+        <section class="event-card">
+          <div class="event-head">
+            <div>
+              <span class="eyebrow">오늘 행사</span>
+              <h2 id="eventTitle">2026.08.28 · 샘플 관광 행사</h2>
+            </div>
+            <span class="event-status">진행 전</span>
+          </div>
+          <div class="stats-grid">
+            <div class="stat"><span>전체</span><b id="statTotal">8</b></div>
+            <div class="stat success"><span>출석</span><b id="statPresent">3</b></div>
+            <div class="stat purple"><span>개인출발</span><b id="statIndividual">2</b></div>
+            <div class="stat danger"><span>미확인</span><b id="statUnknown">3</b></div>
+          </div>
+        </section>
+
+        <button class="qr-hero" data-go="qr">
+          <div class="qr-mini" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <div class="qr-copy">
+            <strong>오늘 출석 QR</strong>
+            <span>행사별 QR을 열어 출석 받기</span>
+          </div>
+          <span class="chev">›</span>
+        </button>
+
+        <div class="feature-grid">
+          <button class="feature-card" data-go="roster">
+            <span class="feature-icon blue"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+            <strong>명단 관리</strong><small>추가 · 검색 · 수정</small>
+          </button>
+          <button class="feature-card" id="ocrButton">
+            <span class="feature-icon violet"><svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8"/></svg></span>
+            <strong>종이 명단 촬영</strong><small>OCR 자동 등록</small>
+          </button>
+          <button class="feature-card" id="sheetButton">
+            <span class="feature-icon green"><svg viewBox="0 0 24 24"><path d="M4 3h16v18H4zM4 9h16M4 15h16M10 3v18"/></svg></span>
+            <strong>Excel · Numbers · Sheets</strong><small>불러오기 · 내보내기</small>
+          </button>
+          <button class="feature-card" id="proxyButton">
+            <span class="feature-icon orange"><svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4"/></svg></span>
+            <strong>대리 QR 공유</strong><small>시간 제한 · 자동 만료</small>
+          </button>
+        </div>
+
+        <div class="list-card compact-actions">
+          <button data-go="status"><span class="row-icon mint">◔</span><div><strong>출석 기록 · 통계</strong><small>오늘 현황과 기록 확인</small></div><span class="chev">›</span></button>
+          <button id="manualButton"><span class="row-icon yellow">✓</span><div><strong>수동 출석 · 정정</strong><small>관리자가 직접 처리</small></div><span class="chev">›</span></button>
+        </div>
+      </section>
+
+      <section class="screen" data-screen="qr">
+        <div class="section-title"><div><span class="eyebrow">오늘 행사</span><h2>출석 QR</h2></div><span class="pill">샘플</span></div>
+        <div class="qr-panel">
+          <div class="fake-qr" aria-label="데모 QR 이미지">
+            <div class="finder f1"></div><div class="finder f2"></div><div class="finder f3"></div>
+            <div class="pixels"></div>
+          </div>
+          <h3>집결지 출석 QR</h3>
+          <p>실제 Supabase 연결 후 행사마다 새 QR이 자동 생성되고, 행사 종료 시 자동 만료됩니다.</p>
+          <button class="primary-button" id="demoStart">행사 시작</button>
+          <button class="secondary-button" id="demoShare">대리 QR 공유</button>
+        </div>
+        <div class="info-card"><strong>다음 단계에서 연결할 기능</strong><p>집결지 QR · 현장도착 QR · 대리 QR · 자동 만료</p></div>
+      </section>
+
+      <section class="screen" data-screen="roster">
+        <div class="section-title"><div><span class="eyebrow">오늘 행사</span><h2>명단 관리</h2></div><button class="small-add" id="addPersonButton">+ 추가</button></div>
+        <label class="search-box">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input id="searchInput" type="search" placeholder="이름 또는 소속 검색" />
+        </label>
+        <div class="filter-row" id="filterRow">
+          <button class="chip active" data-filter="all">전체</button>
+          <button class="chip" data-filter="present">출석</button>
+          <button class="chip" data-filter="individual">개인출발</button>
+          <button class="chip" data-filter="unknown">미확인</button>
+        </div>
+        <div class="people-list" id="peopleList"></div>
+      </section>
+
+      <section class="screen" data-screen="status">
+        <div class="section-title"><div><span class="eyebrow">실시간</span><h2>출석 현황</h2></div><span class="live-dot">● LIVE</span></div>
+        <div class="summary-card">
+          <div><span>출석률</span><strong id="rateText">38%</strong></div>
+          <div class="progress"><span id="progressBar"></span></div>
+        </div>
+        <div class="list-card status-list" id="statusList"></div>
+      </section>
+
+      <section class="screen" data-screen="settings">
+        <div class="section-title"><div><span class="eyebrow">관리</span><h2>설정</h2></div></div>
+        <div class="form-card">
+          <label>기관/모임 이름<input id="orgInput" value="샘플 관광 모임" /></label>
+          <label>관리자 표시 이름<input id="managerInput" value="관리자" /></label>
+          <label class="toggle-row"><span><strong>출석 실시간 팝업</strong><small>출석 즉시 관리자 화면에 표시</small></span><input id="popupToggle" type="checkbox" checked /></label>
+          <label class="toggle-row"><span><strong>전화번호 뒤 4자리 표시</strong><small>관리 화면에서 최소 정보만 표시</small></span><input id="phoneToggle" type="checkbox" checked /></label>
+          <button class="primary-button" id="saveSettings">설정 저장</button>
+        </div>
+      </section>
+    </main>
+
+    <nav class="tabbar" aria-label="하단 메뉴">
+      <button class="tab active" data-go="home"><svg viewBox="0 0 24 24"><path d="m3 11 9-8 9 8v10h-6v-6H9v6H3z"/></svg><span>홈</span></button>
+      <button class="tab" data-go="qr"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM18 14h3M14 18v3"/></svg><span>QR</span></button>
+      <button class="tab" data-go="roster"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87"/></svg><span>명단</span></button>
+      <button class="tab" data-go="status"><svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19V3"/></svg><span>현황</span></button>
+      <button class="tab" data-go="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.13.36.34.7.6 1 .28.27.65.42 1.04.4H21v4h-.09A1.7 1.7 0 0 0 19.4 15z"/></svg><span>설정</span></button>
+    </nav>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <dialog id="personDialog">
+    <form method="dialog" id="personForm">
+      <div class="dialog-head"><strong>참가자 추가</strong><button value="cancel" aria-label="닫기">×</button></div>
+      <label>이름<input id="personName" required maxlength="30" /></label>
+      <label>소속<input id="personOrg" maxlength="50" /></label>
+      <label>전화번호 뒤 4자리<input id="personPhone" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" /></label>
+      <button class="primary-button" value="default" id="personSave">명단에 추가</button>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
