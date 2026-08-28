@@ -1,6 +1,6 @@
-const CACHE='qr-attendance-v3-password-recovery-20260828';
+const CACHE='qr-attendance-v4-password-recovery-20260828';
 const ASSETS=[
-  './','./index.html','./style.css','./app.js','./supabase-config.js','./manifest.json',
+  './','./index.html','./style.css','./app.js','./manifest.json','./supabase-config.js',
   './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'
 ];
 
@@ -11,21 +11,21 @@ self.addEventListener('install', event => {
 
 self.addEventListener('activate', event => {
   event.waitUntil(
-    Promise.all([
-      caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))),
-      self.clients.claim()
-    ])
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))
+      .then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
-  if (event.request.url.includes('supabase.co') || event.request.url.includes('cdn.jsdelivr.net')) return;
   event.respondWith(
-    fetch(event.request).then(response => {
-      const copy=response.clone();
-      caches.open(CACHE).then(cache=>cache.put(event.request,copy));
-      return response;
-    }).catch(()=>caches.match(event.request).then(cached=>cached||caches.match('./index.html')))
+    fetch(event.request)
+      .then(response => {
+        const copy = response.clone();
+        caches.open(CACHE).then(cache => cache.put(event.request, copy));
+        return response;
+      })
+      .catch(() => caches.match(event.request).then(cached => cached || caches.match('./index.html')))
   );
 });
