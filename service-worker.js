@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v6-password-settings-20260828';
+const CACHE='qr-attendance-v7-checked-status-20260828';
 const ASSETS=[
   './',
   './index.html',
