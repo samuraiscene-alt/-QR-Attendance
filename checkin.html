@@ -1,43 +1,118 @@
 <!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f7fbfb">
-  <title>출석 확인</title>
-  <style>
-    *{box-sizing:border-box}
-    body{margin:0;background:linear-gradient(180deg,#fff,#f2fbf9);font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;color:#172126}
-    main{min-height:100vh;display:grid;place-items:center;padding:28px}
-    .card{width:min(100%,430px);background:#fff;border:1px solid #e5eeee;border-radius:28px;padding:30px 22px;box-shadow:0 18px 55px rgba(21,44,52,.11);text-align:center}
-    .mark{width:82px;height:82px;border-radius:24px;background:#28c9b8;color:white;font-size:42px;font-weight:900;display:grid;place-items:center;margin:0 auto 20px}
-    h1{font-size:28px;margin:0 0 10px}
-    p{font-size:15px;line-height:1.6;color:#718087;margin:0}
-    .ok{margin-top:24px;padding:16px;border-radius:18px;background:#effbf9;color:#168f84;font-weight:800}
-    .bad{background:#fff2f2;color:#d94d55}
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f7fbfb">
+<title>출석 확인</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#fff,#f2fbf9);font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;color:#172126}
+main{min-height:100vh;display:grid;place-items:center;padding:28px}.card{width:min(100%,430px);background:#fff;border:1px solid #e5eeee;border-radius:28px;padding:30px 22px;box-shadow:0 18px 55px rgba(21,44,52,.11)}
+.mark{width:82px;height:82px;border-radius:24px;background:#28c9b8;color:#fff;font-size:42px;font-weight:900;display:grid;place-items:center;margin:0 auto 20px}
+h1{font-size:28px;margin:0 0 10px;text-align:center}.lead{font-size:15px;line-height:1.6;color:#718087;margin:0 0 24px;text-align:center}
+label{display:block;font-size:14px;font-weight:800;margin:16px 0 8px}input{width:100%;height:54px;border:1px solid #dfe8e9;border-radius:16px;padding:0 15px;font-size:17px;outline:none;background:#fff}
+input:focus{border-color:#28c9b8;box-shadow:0 0 0 3px rgba(40,201,184,.12)}button{width:100%;height:54px;border:0;border-radius:16px;background:#20b9aa;color:#fff;font-size:17px;font-weight:900;margin-top:22px}
+button:disabled{opacity:.55}.status{display:none;margin-top:20px;padding:16px;border-radius:18px;background:#effbf9;color:#168f84;font-weight:800;line-height:1.5;text-align:center}
+.status.bad{background:#fff2f2;color:#d94d55}.status.show{display:block}.privacy{margin:14px 0 0;text-align:center;color:#97a1a6;font-size:12px;line-height:1.5}
+</style>
 </head>
 <body>
-<main>
-  <section class="card">
-    <div class="mark">✓</div>
-    <h1>출석 확인</h1>
-    <p id="message">QR 정보를 확인하고 있습니다.</p>
-    <div class="ok" id="status">잠시만 기다려주세요.</div>
-  </section>
-</main>
+<main><section class="card">
+<div class="mark">✓</div>
+<h1>출석 확인</h1>
+<p class="lead">명단에 등록된 이름과 전화번호 뒤 4자리를 입력해주세요.</p>
+<form id="checkinForm">
+<label for="nameInput">이름</label>
+<input id="nameInput" autocomplete="name" maxlength="80" placeholder="예: 홍길동" required>
+<label for="phoneInput">전화번호 뒤 4자리</label>
+<input id="phoneInput" inputmode="numeric" autocomplete="off" maxlength="4" pattern="[0-9]{4}" placeholder="예: 5678" required>
+<button id="submitButton" type="submit">출석하기</button>
+</form>
+<div class="status" id="status" role="status" aria-live="polite"></div>
+<p class="privacy">전화번호 전체는 입력하지 않습니다.</p>
+</section></main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-config.js"></script>
 <script>
+(() => {
+  'use strict';
   const token = new URLSearchParams(location.search).get('t');
-  const msg = document.getElementById('message');
+  const form = document.getElementById('checkinForm');
+  const nameInput = document.getElementById('nameInput');
+  const phoneInput = document.getElementById('phoneInput');
+  const button = document.getElementById('submitButton');
   const status = document.getElementById('status');
-  if (token) {
-    msg.textContent = '행사 전용 QR을 정상적으로 읽었습니다.';
-    status.textContent = 'QR 연결 성공 · 본인 확인 기능은 다음 단계에서 연결합니다.';
-  } else {
-    msg.textContent = '유효한 QR 정보가 없습니다.';
-    status.textContent = 'QR을 다시 스캔해주세요.';
-    status.classList.add('bad');
+  const showStatus = (message, bad=false) => {
+    status.textContent = message;
+    status.classList.toggle('bad', bad);
+    status.classList.add('show');
+  };
+  if (!token) {
+    form.hidden = true;
+    showStatus('유효한 QR 정보가 없습니다. QR을 다시 스캔해주세요.', true);
+    return;
   }
+  if (!window.supabase || !window.SUPABASE_URL || !window.SUPABASE_PUBLISHABLE_KEY) {
+    form.hidden = true;
+    showStatus('출석 시스템 연결을 확인해주세요.', true);
+    return;
+  }
+  const sb = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_PUBLISHABLE_KEY, {
+    auth: { persistSession:false, autoRefreshToken:false, detectSessionInUrl:false }
+  });
+  phoneInput.addEventListener('input', () => {
+    phoneInput.value = phoneInput.value.replace(/\D/g, '').slice(0, 4);
+  });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = nameInput.value.trim();
+    const phone = phoneInput.value.trim();
+    if (!name || !/^\d{4}$/.test(phone)) {
+      showStatus('이름과 전화번호 뒤 4자리를 정확히 입력해주세요.', true);
+      return;
+    }
+    button.disabled = true;
+    button.textContent = '확인 중…';
+    status.classList.remove('show');
+    try {
+      const { data, error } = await sb.rpc('qr_check_in', {
+        p_token: token,
+        p_name: name,
+        p_phone_last4: phone
+      });
+      if (error) throw error;
+      const result = data || {};
+      if (result.ok && result.code === 'checked_in') {
+        form.hidden = true;
+        showStatus(`${result.name || name}님, 출석 처리되었습니다.`);
+        return;
+      }
+      if (result.ok && result.code === 'already_checked_in') {
+        form.hidden = true;
+        showStatus(`${result.name || name}님은 이미 출석 처리되어 있습니다.`);
+        return;
+      }
+      if (result.code === 'not_matched') {
+        showStatus('명단과 일치하는 정보가 없습니다. 이름과 전화번호 뒤 4자리를 확인해주세요.', true);
+      } else if (result.code === 'individual_mode') {
+        showStatus(`${result.name || name}님은 개인출발로 등록되어 있습니다.`, true);
+      } else if (result.code === 'invalid_or_expired_qr') {
+        form.hidden = true;
+        showStatus('이 QR은 만료되었거나 사용할 수 없습니다.', true);
+      } else {
+        showStatus('입력 정보를 확인해주세요.', true);
+      }
+    } catch (err) {
+      console.error(err);
+      showStatus('출석 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.', true);
+    } finally {
+      if (!form.hidden) {
+        button.disabled = false;
+        button.textContent = '출석하기';
+      }
+    }
+  });
+})();
 </script>
 </body>
 </html>
