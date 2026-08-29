@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v16-ios-notification-stack-20260829';
+const CACHE='qr-attendance-v17-ios-notification-motion-20260829';
 const ASSETS=[
 './','./index.html','./checkin.html','./style.css','./app.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'

@@ -660,38 +660,54 @@
         left:50%;
         top:50%;
         transform:translate(-50%,-50%);
-        width:min(calc(100% - 34px),520px);
+        width:min(calc(100% - 30px),540px);
         z-index:9000;
         pointer-events:none;
+        transition:
+          top .38s cubic-bezier(.22,.8,.22,1),
+          transform .38s cubic-bezier(.22,.8,.22,1),
+          width .32s ease;
       }
       #attendanceNoticeCenter.is-empty{display:none}
+      #attendanceNoticeCenter.expanded{
+        top:calc(env(safe-area-inset-top) + 86px);
+        transform:translate(-50%,0);
+        width:min(calc(100% - 22px),560px);
+      }
       #attendanceNoticeStack{
         position:relative;
         width:100%;
         pointer-events:auto;
       }
       #attendanceNoticeStack.collapsed{
-        height:74px;
+        height:82px;
+        overflow:visible;
       }
       #attendanceNoticeStack.expanded{
         display:flex;
         flex-direction:column;
         gap:10px;
-        max-height:58vh;
+        height:calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 190px);
+        min-height:300px;
         overflow-y:auto;
-        padding:4px 2px 6px;
+        overscroll-behavior:contain;
+        padding:8px 2px 20px;
         -webkit-overflow-scrolling:touch;
+        scroll-behavior:smooth;
+        touch-action:pan-y;
+        mask-image:linear-gradient(to bottom,transparent 0,#000 18px,#000 calc(100% - 22px),transparent 100%);
+        -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 18px,#000 calc(100% - 22px),transparent 100%);
       }
       .attendance-notice{
         position:relative;
         width:100%;
-        min-height:70px;
+        min-height:72px;
         border-radius:22px;
-        background:rgba(246,246,248,.94);
-        border:1px solid rgba(255,255,255,.78);
-        box-shadow:0 10px 30px rgba(22,30,36,.18);
-        backdrop-filter:blur(24px);
-        -webkit-backdrop-filter:blur(24px);
+        background:rgba(198,199,204,.93);
+        border:1px solid rgba(255,255,255,.5);
+        box-shadow:0 11px 32px rgba(21,28,34,.22);
+        backdrop-filter:blur(26px) saturate(1.15);
+        -webkit-backdrop-filter:blur(26px) saturate(1.15);
         display:flex;
         align-items:center;
         padding:0 54px 0 18px;
@@ -702,8 +718,27 @@
         user-select:none;
         -webkit-user-select:none;
         touch-action:pan-y;
-        transition:transform .18s ease,opacity .18s ease,top .2s ease;
+        transform-origin:center top;
+        transition:
+          transform .34s cubic-bezier(.2,.8,.2,1),
+          opacity .28s ease,
+          filter .28s ease,
+          margin .34s cubic-bezier(.2,.8,.2,1);
         overflow:hidden;
+      }
+      #attendanceNoticeStack.expanded .attendance-notice{
+        flex:0 0 auto;
+        opacity:1;
+        transform:translateY(0) scale(1);
+        animation:noticeOpen .36s cubic-bezier(.2,.8,.2,1) both;
+      }
+      #attendanceNoticeStack.expanded .attendance-notice:nth-child(2){animation-delay:.025s}
+      #attendanceNoticeStack.expanded .attendance-notice:nth-child(3){animation-delay:.05s}
+      #attendanceNoticeStack.expanded .attendance-notice:nth-child(4){animation-delay:.075s}
+      #attendanceNoticeStack.expanded .attendance-notice:nth-child(n+5){animation-delay:.1s}
+      @keyframes noticeOpen{
+        from{opacity:.2;transform:translateY(-22px) scale(.965)}
+        to{opacity:1;transform:translateY(0) scale(1)}
       }
       .attendance-notice-line{
         white-space:nowrap;
@@ -712,60 +747,80 @@
         width:100%;
       }
       .attendance-notice .notice-status{
-        color:#16a897;
+        color:#0a887c;
         font-weight:900;
       }
-      .attendance-notice[data-status="individual"] .notice-status{color:#8150dc}
-      .attendance-notice[data-status="unknown"] .notice-status{color:#e44c51}
+      .attendance-notice[data-status="individual"] .notice-status{color:#7045c8}
+      .attendance-notice[data-status="unknown"] .notice-status{color:#c53f46}
+
       #attendanceNoticeStack.collapsed .attendance-notice{
         position:absolute;
         left:0;
         top:0;
       }
-      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(1){
-        z-index:4;
-        transform:translateY(0) scale(1);
-      }
-      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(2){
-        z-index:3;
-        transform:translateY(-8px) scale(.97);
-        opacity:.92;
-      }
-      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(3){
-        z-index:2;
-        transform:translateY(-15px) scale(.94);
-        opacity:.78;
-      }
-      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(-n+3)~.attendance-notice{
+      #attendanceNoticeStack.collapsed .attendance-notice:not(:last-child) .attendance-notice-line{
         opacity:0;
       }
+      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(1){
+        z-index:6;
+        transform:translateY(0) scale(1);
+        opacity:1;
+      }
+      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(2){
+        z-index:5;
+        transform:translateY(-9px) scale(.965);
+        opacity:.9;
+        filter:brightness(.96);
+      }
+      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(3){
+        z-index:4;
+        transform:translateY(-17px) scale(.93);
+        opacity:.7;
+        filter:brightness(.92);
+      }
+      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(n+4){
+        opacity:0;
+        transform:translateY(-23px) scale(.91);
+        pointer-events:none;
+      }
+
       #attendanceNoticeClear{
         position:absolute;
         right:8px;
         top:50%;
         transform:translateY(-50%);
-        width:36px;
-        height:36px;
+        width:38px;
+        height:38px;
         border:0;
         border-radius:50%;
-        background:rgba(118,118,128,.18);
-        color:#48515a;
-        font-size:22px;
+        background:rgba(82,82,88,.22);
+        color:#353b42;
+        font-size:24px;
         line-height:1;
         display:grid;
         place-items:center;
-        z-index:10;
+        z-index:20;
         pointer-events:auto;
+        backdrop-filter:blur(12px);
+        -webkit-backdrop-filter:blur(12px);
+        transition:top .3s ease,transform .3s ease,background .2s ease;
       }
       #attendanceNoticeCenter.expanded #attendanceNoticeClear{
         top:-44px;
         transform:none;
+        background:rgba(82,82,88,.28);
       }
       .attendance-notice.swiping{
-        transition:none;
+        transition:none !important;
       }
       @media (max-width:390px){
         .attendance-notice{font-size:14px;padding-left:15px;padding-right:50px}
+        #attendanceNoticeCenter.expanded{
+          top:calc(env(safe-area-inset-top) + 78px);
+        }
+        #attendanceNoticeStack.expanded{
+          height:calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 174px);
+        }
       }
     `;
     document.head.appendChild(style);
@@ -790,8 +845,17 @@
     $('#attendanceNoticeStack').addEventListener('click', e => {
       if (notificationState.items.length <= 1) return;
       if (e.target.closest('.attendance-notice')?.dataset.justSwiped === '1') return;
+
+      const wasExpanded = notificationState.expanded;
       notificationState.expanded = !notificationState.expanded;
       renderNotificationCenter();
+
+      if (!wasExpanded && notificationState.expanded) {
+        requestAnimationFrame(() => {
+          const stack = $('#attendanceNoticeStack');
+          if (stack) stack.scrollTop = stack.scrollHeight;
+        });
+      }
     });
   }
 
