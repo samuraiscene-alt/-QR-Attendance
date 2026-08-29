@@ -2444,17 +2444,6 @@
         color:#159f93;font-size:13px;font-weight:900;padding:10px;
       }
       .ocr-source-button small{display:block;color:#879399;font-size:10px;font-weight:700;margin-top:4px}
-      .ocr-hidden-file-input{
-        position:fixed!important;
-        left:-9999px!important;
-        top:-9999px!important;
-        width:1px!important;
-        height:1px!important;
-        opacity:0!important;
-        overflow:hidden!important;
-        clip-path:inset(50%)!important;
-        pointer-events:none!important;
-      }
       .ocr-privacy{
         margin:11px 0 0;padding:11px 12px;border-radius:14px;background:#f4fbfa;
         color:#61747a;font-size:10px;line-height:1.5;
@@ -2512,9 +2501,6 @@
           <button type="button" class="ocr-source-button" id="ocrCameraButton">카메라 촬영<small>지금 종이 명단 촬영</small></button>
           <button type="button" class="ocr-source-button" id="ocrPhotoButton">사진 선택<small>사진 보관함 · 파일</small></button>
         </div>
-        <input id="ocrCameraInput" class="ocr-hidden-file-input" type="file" accept="image/*" capture="environment" aria-hidden="true" tabindex="-1">
-        <input id="ocrPhotoInput" class="ocr-hidden-file-input" type="file" accept="image/*" aria-hidden="true" tabindex="-1">
-
         <div class="ocr-privacy">사진은 Supabase나 Google Sheets에 저장하지 않고, 이 기기에서 글자를 읽은 뒤 명단 데이터만 등록합니다.</div>
 
         <div id="ocrWorkArea"></div>
@@ -2527,10 +2513,8 @@
       resetOcrDialog();
       dialog.close();
     });
-    $('#ocrCameraButton')?.addEventListener('click', () => $('#ocrCameraInput')?.click());
-    $('#ocrPhotoButton')?.addEventListener('click', () => $('#ocrPhotoInput')?.click());
-    $('#ocrCameraInput')?.addEventListener('change', handleOcrImageFile);
-    $('#ocrPhotoInput')?.addEventListener('change', handleOcrImageFile);
+    $('#ocrCameraButton')?.addEventListener('click', () => openOcrFilePicker(true));
+    $('#ocrPhotoButton')?.addEventListener('click', () => openOcrFilePicker(false));
     $('#ocrImportButton')?.addEventListener('click', importOcrRows);
   }
 
@@ -2556,10 +2540,36 @@
       importButton.disabled = false;
       importButton.textContent = '등록 가능한 명단 불러오기';
     }
-    const camera = $('#ocrCameraInput');
-    const photo = $('#ocrPhotoInput');
-    if (camera) camera.value = '';
-    if (photo) photo.value = '';
+  }
+
+  function openOcrFilePicker(useCamera=false) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    if (useCamera) input.setAttribute('capture', 'environment');
+
+    input.style.position = 'fixed';
+    input.style.left = '-10000px';
+    input.style.top = '-10000px';
+    input.style.width = '1px';
+    input.style.height = '1px';
+    input.style.opacity = '0';
+    input.style.pointerEvents = 'none';
+
+    input.addEventListener('change', async event => {
+      try {
+        await handleOcrImageFile(event);
+      } finally {
+        input.remove();
+      }
+    }, { once:true });
+
+    document.body.appendChild(input);
+    input.click();
+
+    window.setTimeout(() => {
+      if (document.body.contains(input) && !input.files?.length) input.remove();
+    }, 120000);
   }
 
   async function ensureTesseractLoaded() {
