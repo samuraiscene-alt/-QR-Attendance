@@ -1548,6 +1548,154 @@
     pushAttendanceNotification(person, 'arrived');
   }
 
+  function ensureParticipantEditUI() {
+    if ($('#participantEditDialog')) return;
+
+    const dialog = document.createElement('dialog');
+    dialog.id = 'participantEditDialog';
+    dialog.style.cssText = 'width:min(calc(100% - 34px),420px);border:0;border-radius:26px;padding:0;box-shadow:0 22px 70px rgba(20,39,45,.22);background:#fff;';
+    dialog.innerHTML = `
+      <form id="participantEditForm" style="padding:24px 20px 20px;background:#fff;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+          <strong style="font-size:22px;">참가자 수정</strong>
+          <button type="button" id="participantEditClose" aria-label="닫기"
+            style="border:0;background:#f1f3f4;width:38px;height:38px;border-radius:50%;font-size:23px;color:#596267;">×</button>
+        </div>
+
+        <input id="participantEditLinkId" type="hidden">
+        <input id="participantEditParticipantId" type="hidden">
+
+        <label style="display:block;font-size:13px;font-weight:850;margin:13px 0 6px;">이름</label>
+        <input id="participantEditName" maxlength="30" required
+          style="box-sizing:border-box;width:100%;height:50px;border:1px solid #dfe7e9;border-radius:15px;padding:0 14px;font-size:16px;">
+
+        <label style="display:block;font-size:13px;font-weight:850;margin:13px 0 6px;">소속</label>
+        <input id="participantEditOrg" maxlength="50"
+          style="box-sizing:border-box;width:100%;height:50px;border:1px solid #dfe7e9;border-radius:15px;padding:0 14px;font-size:16px;">
+
+        <label style="display:block;font-size:13px;font-weight:850;margin:13px 0 6px;">전화번호 뒤 4자리</label>
+        <input id="participantEditPhone" inputmode="numeric" maxlength="4" pattern="[0-9]{4}"
+          style="box-sizing:border-box;width:100%;height:50px;border:1px solid #dfe7e9;border-radius:15px;padding:0 14px;font-size:16px;">
+
+        <div id="participantEditMessage" style="min-height:20px;margin:10px 0 4px;color:#d94d55;font-size:13px;font-weight:750;"></div>
+
+        <button type="submit" class="primary-button" id="participantEditSave" style="width:100%;">저장</button>
+        <button type="button" id="participantEditDelete"
+          style="width:100%;height:50px;border:1px solid #ffd6d9;background:#fff6f6;color:#d94d55;border-radius:15px;font-weight:850;margin-top:10px;">
+          현재 행사에서 삭제
+        </button>
+      </form>
+    `;
+    document.body.appendChild(dialog);
+
+    $('#participantEditClose')?.addEventListener('click', () => {
+      $('#participantEditForm')?.reset();
+      dialog.close();
+    });
+
+    $('#participantEditPhone')?.addEventListener('input', e => {
+      e.target.value = e.target.value.replace(/\D/g, '').slice(0, 4);
+    });
+
+    $('#participantEditForm')?.addEventListener('submit', saveParticipantEdit);
+    $('#participantEditDelete')?.addEventListener('click', deleteParticipantFromEvent);
+  }
+
+  function openParticipantEdit(linkId) {
+    ensureParticipantEditUI();
+    const person = state.people.find(p => p.linkId === linkId);
+    if (!person) return;
+
+    $('#participantEditLinkId').value = person.linkId || '';
+    $('#participantEditParticipantId').value = person.participantId || '';
+    $('#participantEditName').value = person.name || '';
+    $('#participantEditOrg').value = person.org || '';
+    $('#participantEditPhone').value = person.phone || '';
+    $('#participantEditMessage').textContent = '';
+    $('#participantEditDialog')?.showModal();
+  }
+
+  async function saveParticipantEdit(e) {
+    e.preventDefault();
+
+    const participantId = $('#participantEditParticipantId').value;
+    const name = $('#participantEditName').value.trim();
+    const affiliation = $('#participantEditOrg').value.trim();
+    const phone_last4 = $('#participantEditPhone').value.trim();
+    const message = $('#participantEditMessage');
+    const save = $('#participantEditSave');
+
+    if (!participantId || !name) {
+      message.textContent = '이름을 입력해주세요.';
+      return;
+    }
+    if (phone_last4 && !/^\d{4}$/.test(phone_last4)) {
+      message.textContent = '전화번호 뒤 4자리는 숫자 4자리로 입력해주세요.';
+      return;
+    }
+
+    save.disabled = true;
+    save.textContent = '저장 중…';
+    message.textContent = '';
+
+    const { error } = await sb
+      .from('participants')
+      .update({
+        name,
+        affiliation: affiliation || null,
+        phone_last4: phone_last4 || null
+      })
+      .eq('id', participantId)
+      .eq('organization_id', state.member.organization_id);
+
+    save.disabled = false;
+    save.textContent = '저장';
+
+    if (error) {
+      console.error('participant edit error:', error);
+      message.textContent = `수정 실패 · ${error.message || '확인 필요'}`;
+      return;
+    }
+
+    await loadPeople();
+    renderAll();
+    $('#participantEditDialog')?.close();
+    toast(`${name} 수정 완료`);
+  }
+
+  async function deleteParticipantFromEvent() {
+    const linkId = $('#participantEditLinkId').value;
+    const name = $('#participantEditName').value.trim() || '참가자';
+    if (!linkId || !state.event) return;
+
+    const ok = window.confirm(`${name}님을 현재 행사 명단에서 삭제하시겠습니까?\n이전 행사 기록에는 영향을 주지 않습니다.`);
+    if (!ok) return;
+
+    const button = $('#participantEditDelete');
+    button.disabled = true;
+    button.textContent = '삭제 중…';
+
+    const { error } = await sb
+      .from('event_participants')
+      .delete()
+      .eq('id', linkId)
+      .eq('event_id', state.event.id);
+
+    button.disabled = false;
+    button.textContent = '현재 행사에서 삭제';
+
+    if (error) {
+      console.error('participant unlink error:', error);
+      $('#participantEditMessage').textContent = `삭제 실패 · ${error.message || '확인 필요'}`;
+      return;
+    }
+
+    await loadPeople();
+    renderAll();
+    $('#participantEditDialog')?.close();
+    toast(`${name} 명단에서 삭제 완료`);
+  }
+
   function renderPeople() {
     const list = $('#peopleList');
     if (!list) return;
@@ -1574,6 +1722,8 @@
             ? `<small style="color:#0b9184;font-weight:850;">현장 도착 ${escapeHtml(formatCheckTime(p.arrivedAt))}</small>`
             : ''}
         </div>
+        <button type="button" data-edit-person="${p.linkId}" aria-label="${escapeHtml(p.name)} 수정"
+          style="flex:0 0 auto;width:34px;height:34px;border:0;border-radius:11px;background:#f1f6f6;color:#65747b;font-size:18px;font-weight:900;display:grid;place-items:center;">✎</button>
         <div style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">
           ${p.status === 'present' && p.checkedAt
             ? `<span class="status-button present" style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;">${escapeHtml(formatCheckTime(p.checkedAt))}</span>`
@@ -1587,6 +1737,10 @@
 
     $$('[data-person]', list).forEach(b => {
       b.addEventListener('click', () => cycleStatus(b.dataset.person));
+    });
+
+    $$('[data-edit-person]', list).forEach(b => {
+      b.addEventListener('click', () => openParticipantEdit(b.dataset.editPerson));
     });
   }
 
@@ -1843,6 +1997,7 @@
   async function init() {
     ensureLoginUI();
     ensureEventRegistrationUI();
+    ensureParticipantEditUI();
     loadNotificationState();
     ensureNotificationCenter();
     renderNotificationCenter();
