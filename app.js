@@ -629,12 +629,17 @@
   const notificationState = {
     items: [],
     expanded: false,
-    storageKey: 'qr-attendance-notification-stack-v16',
-    positionKey: 'qr-attendance-notification-position-v18',
     y: null,
     dragging: false,
-    moved: false
+    moved: false,
+    scrolling: false,
+    storageKey: 'qr-attendance-notification-stack-v21',
+    positionKey: 'qr-attendance-notification-position-v21'
   };
+
+  function defaultNotificationY() {
+    return Math.round(window.innerHeight * 0.52);
+  }
 
   function loadNotificationState() {
     try {
@@ -646,9 +651,9 @@
 
     try {
       const savedY = Number(localStorage.getItem(notificationState.positionKey));
-      notificationState.y = Number.isFinite(savedY) ? savedY : null;
+      notificationState.y = Number.isFinite(savedY) ? savedY : defaultNotificationY();
     } catch {
-      notificationState.y = null;
+      notificationState.y = defaultNotificationY();
     }
   }
 
@@ -661,6 +666,14 @@
     } catch {}
   }
 
+  function saveNotificationPosition() {
+    try {
+      if (Number.isFinite(notificationState.y)) {
+        localStorage.setItem(notificationState.positionKey, String(notificationState.y));
+      }
+    } catch {}
+  }
+
   function ensureNotificationCenter() {
     if ($('#attendanceNoticeCenter')) return;
 
@@ -668,24 +681,16 @@
     style.textContent = `
       #attendanceNoticeCenter{
         position:fixed;
-        left:50%;
+        left:16px;
+        right:16px;
         top:52%;
-        transform:translate(-50%,-50%);
-        width:min(calc(100% - 26px),540px);
+        transform:translateY(-50%);
         z-index:9000;
         pointer-events:none;
+        transition:top .18s ease;
       }
       #attendanceNoticeCenter.is-empty{display:none}
       #attendanceNoticeCenter.dragging{transition:none}
-      #attendanceNoticeCenter.expanded{
-        inset:0;
-        left:0;
-        top:0;
-        width:100%;
-        height:100dvh;
-        transform:none;
-        pointer-events:none;
-      }
       #attendanceNoticeStack{
         position:relative;
         width:100%;
@@ -696,36 +701,32 @@
         overflow:visible;
       }
       #attendanceNoticeStack.expanded{
-        position:absolute;
-        left:10px;
-        right:10px;
-        top:calc(env(safe-area-inset-top) + 16px);
-        bottom:calc(env(safe-area-inset-bottom) + 78px);
         display:flex;
         flex-direction:column;
         gap:10px;
+        max-height:min(68dvh,620px);
         overflow-y:auto;
         -webkit-overflow-scrolling:touch;
         overscroll-behavior:contain;
         scroll-behavior:smooth;
-        padding:48px 2px 26px;
+        padding:4px 0 8px;
         touch-action:pan-y;
-        pointer-events:auto;
       }
       .attendance-notice{
         position:relative;
+        box-sizing:border-box;
         width:100%;
         min-height:72px;
         border-radius:22px;
-        background:rgba(174,174,178,.96);
-        border:1px solid rgba(255,255,255,.6);
-        box-shadow:0 10px 28px rgba(20,28,34,.24);
-        backdrop-filter:blur(24px) saturate(1.08);
-        -webkit-backdrop-filter:blur(24px) saturate(1.08);
+        background:rgba(232,232,237,.88);
+        border:1px solid rgba(255,255,255,.78);
+        box-shadow:0 10px 28px rgba(28,34,40,.18);
+        backdrop-filter:blur(24px) saturate(1.18);
+        -webkit-backdrop-filter:blur(24px) saturate(1.18);
         display:flex;
         align-items:center;
-        padding:0 54px 0 18px;
-        color:#111820;
+        padding:0 58px 0 18px;
+        color:#12181f;
         font-size:15px;
         font-weight:800;
         letter-spacing:-.25px;
@@ -733,12 +734,7 @@
         -webkit-user-select:none;
         touch-action:pan-y;
         overflow:hidden;
-        transition:transform .24s ease,opacity .2s ease;
-      }
-      #attendanceNoticeStack.expanded .attendance-notice{
-        flex:0 0 auto;
-        opacity:1;
-        transform:none;
+        transition:transform .2s ease,opacity .18s ease;
       }
       .attendance-notice-line{
         white-space:nowrap;
@@ -746,9 +742,9 @@
         text-overflow:ellipsis;
         width:100%;
       }
-      .attendance-notice .notice-status{color:#087f74;font-weight:900}
-      .attendance-notice[data-status="individual"] .notice-status{color:#663bb8}
-      .attendance-notice[data-status="unknown"] .notice-status{color:#bd343b}
+      .attendance-notice .notice-status{color:#0b9184;font-weight:900}
+      .attendance-notice[data-status="individual"] .notice-status{color:#7348c7}
+      .attendance-notice[data-status="unknown"] .notice-status{color:#d4444b}
 
       #attendanceNoticeStack.collapsed .attendance-notice{
         position:absolute;
@@ -762,46 +758,47 @@
         z-index:6;transform:translateY(0) scale(1);opacity:1;
       }
       #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(2){
-        z-index:5;transform:translateY(-9px) scale(.965);opacity:.92;
+        z-index:5;transform:translateY(-9px) scale(.965);opacity:.90;
       }
       #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(3){
-        z-index:4;transform:translateY(-17px) scale(.93);opacity:.76;
+        z-index:4;transform:translateY(-17px) scale(.93);opacity:.72;
       }
       #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(n+4){
         opacity:0;transform:translateY(-23px) scale(.91);pointer-events:none;
       }
 
+      #attendanceNoticeStack.expanded .attendance-notice{
+        position:relative;
+        flex:0 0 auto;
+        transform:none;
+        opacity:1;
+      }
+
       #attendanceNoticeClear{
         position:absolute;
-        right:8px;
-        top:50%;
-        transform:translateY(-50%);
-        width:38px;
-        height:38px;
+        right:10px;
+        top:17px;
+        width:40px;
+        height:40px;
         border:0;
         border-radius:50%;
-        background:rgba(72,72,74,.28);
-        color:#2f3439;
+        background:rgba(120,120,128,.22);
+        color:#444a50;
         font-size:24px;
         line-height:1;
         display:grid;
         place-items:center;
-        z-index:50;
+        z-index:30;
         pointer-events:auto;
-      }
-      #attendanceNoticeCenter.expanded #attendanceNoticeClear{
-        position:fixed;
-        top:calc(env(safe-area-inset-top) + 18px);
-        right:18px;
-        transform:none;
+        backdrop-filter:blur(12px);
+        -webkit-backdrop-filter:blur(12px);
       }
       .attendance-notice.swiping{transition:none!important}
-      @media (max-width:390px){
-        .attendance-notice{font-size:14px;padding-left:15px;padding-right:50px}
-        #attendanceNoticeStack.expanded{
-          left:8px;right:8px;
-          bottom:calc(env(safe-area-inset-bottom) + 72px);
-        }
+
+      @media(max-width:390px){
+        #attendanceNoticeCenter{left:12px;right:12px}
+        .attendance-notice{font-size:14px;padding-left:15px;padding-right:56px}
+        #attendanceNoticeStack.expanded{max-height:66dvh}
       }
     `;
     document.head.appendChild(style);
@@ -814,6 +811,7 @@
       <button id="attendanceNoticeClear" type="button" aria-label="알림 전체 삭제">×</button>
     `;
     document.body.appendChild(center);
+
     installNotificationCenterDrag(center);
 
     $('#attendanceNoticeClear').addEventListener('click', e => {
@@ -824,120 +822,44 @@
       renderNotificationCenter();
     });
 
-    $('#attendanceNoticeStack').addEventListener('click', e => {
-      if (notificationState.dragging || notificationState.moved) return;
-      if (e.target.closest('.attendance-notice')?.dataset.justSwiped === '1') return;
-      if (notificationState.expanded) return;
-      if (notificationState.items.length <= 1) return;
+    const stack = $('#attendanceNoticeStack');
 
-      notificationState.expanded = true;
-      renderNotificationCenter();
+    let tapStartX = 0;
+    let tapStartY = 0;
+    let tapMoved = false;
 
-      requestAnimationFrame(() => {
-        const stack = $('#attendanceNoticeStack');
-        if (stack) stack.scrollTop = stack.scrollHeight;
-      });
-    });
-  }
-
-  function clampNotificationY(y, center) {
-    const rect = center.getBoundingClientRect();
-    const half = Math.max(42, rect.height / 2);
-    const minY = half + 14;
-    const maxY = window.innerHeight - half - 92;
-    return Math.min(Math.max(y, minY), Math.max(minY, maxY));
-  }
-
-  function applyNotificationPosition() {
-    const center = $('#attendanceNoticeCenter');
-    if (!center || notificationState.expanded) return;
-
-    if (!Number.isFinite(notificationState.y)) {
-      notificationState.y = Math.round(window.innerHeight * .52);
-    }
-
-    notificationState.y = clampNotificationY(notificationState.y, center);
-    center.style.top = `${notificationState.y}px`;
-  }
-
-  function saveNotificationPosition() {
-    try {
-      if (Number.isFinite(notificationState.y)) {
-        localStorage.setItem(notificationState.positionKey, String(notificationState.y));
-      }
-    } catch {}
-  }
-
-  function installNotificationCenterDrag(center) {
-    let startX = 0;
-    let startY = 0;
-    let startCenterY = 0;
-    let dragging = false;
-    let moved = false;
-    let direction = null;
-
-    center.addEventListener('touchstart', e => {
-      if (notificationState.expanded) return;
-      if (e.target.closest('#attendanceNoticeClear')) return;
-
+    stack.addEventListener('touchstart', e => {
       const t = e.touches?.[0];
       if (!t) return;
-
-      startX = t.clientX;
-      startY = t.clientY;
-      const rect = center.getBoundingClientRect();
-      startCenterY = rect.top + rect.height / 2;
-      dragging = false;
-      moved = false;
-      direction = null;
-      notificationState.dragging = false;
-      notificationState.moved = false;
+      tapStartX = t.clientX;
+      tapStartY = t.clientY;
+      tapMoved = false;
+      notificationState.scrolling = false;
     }, {passive:true});
 
-    center.addEventListener('touchmove', e => {
-      if (notificationState.expanded) return;
+    stack.addEventListener('touchmove', e => {
       const t = e.touches?.[0];
       if (!t) return;
-
-      const dx = t.clientX - startX;
-      const dy = t.clientY - startY;
-
-      if (!direction && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
-        direction = Math.abs(dy) >= Math.abs(dx) ? 'vertical' : 'horizontal';
+      if (Math.abs(t.clientX - tapStartX) > 8 || Math.abs(t.clientY - tapStartY) > 8) {
+        tapMoved = true;
+        if (notificationState.expanded) notificationState.scrolling = true;
       }
+    }, {passive:true});
 
-      if (direction == 'horizontal') return;
-      if (direction != 'vertical') return;
-
-      e.preventDefault();
-      dragging = true;
-      moved = true;
-      notificationState.dragging = true;
-      notificationState.moved = true;
-      center.classList.add('dragging');
-
-      notificationState.y = clampNotificationY(startCenterY + dy, center);
-      center.style.top = `${notificationState.y}px`;
-    }, {passive:false});
-
-    const finish = () => {
-      if (dragging) {
-        center.classList.remove('dragging');
-        saveNotificationPosition();
+    stack.addEventListener('touchend', () => {
+      if (notificationState.scrolling) {
+        setTimeout(() => { notificationState.scrolling = false; }, 140);
       }
-      notificationState.dragging = false;
-      dragging = false;
-      direction = null;
+    }, {passive:true});
 
-      if (moved) {
-        setTimeout(() => {
-          notificationState.moved = false;
-        }, 160);
-      }
-    };
+    stack.addEventListener('click', e => {
+      if (notificationState.dragging || notificationState.moved || notificationState.scrolling || tapMoved) return;
+      if (e.target.closest('.attendance-notice')?.dataset.justSwiped === '1') return;
+      if (notificationState.items.length <= 1) return;
 
-    center.addEventListener('touchend', finish, {passive:true});
-    center.addEventListener('touchcancel', finish, {passive:true});
+      notificationState.expanded = !notificationState.expanded;
+      renderNotificationCenter();
+    });
   }
 
   function noticeStatusText(status) {
@@ -946,6 +868,33 @@
       individual:'개인출발',
       unknown:'미확인'
     })[status] || '미확인';
+  }
+
+  function clampNotificationY(y, center) {
+    const rect = center.getBoundingClientRect();
+    const height = notificationState.expanded
+      ? Math.min(rect.height || 320, window.innerHeight * 0.68)
+      : 82;
+    const half = Math.max(41, height / 2);
+    const topSafe = 78;
+    const bottomSafe = 92;
+    const minY = topSafe + half;
+    const maxY = Math.max(minY, window.innerHeight - bottomSafe - half);
+    return Math.min(Math.max(y, minY), maxY);
+  }
+
+  function applyNotificationPosition() {
+    const center = $('#attendanceNoticeCenter');
+    if (!center || notificationState.items.length === 0) return;
+
+    if (!Number.isFinite(notificationState.y)) {
+      notificationState.y = defaultNotificationY();
+    }
+
+    requestAnimationFrame(() => {
+      notificationState.y = clampNotificationY(notificationState.y, center);
+      center.style.top = `${notificationState.y}px`;
+    });
   }
 
   function renderNotificationCenter() {
@@ -957,14 +906,7 @@
 
     const items = notificationState.items;
     center.classList.toggle('is-empty', items.length === 0);
-    center.classList.toggle('expanded', notificationState.expanded);
     stack.className = notificationState.expanded ? 'expanded' : 'collapsed';
-
-    if (notificationState.expanded) {
-      center.style.top = '0';
-    } else {
-      requestAnimationFrame(applyNotificationPosition);
-    }
 
     stack.innerHTML = items.map(item => `
       <div class="attendance-notice"
@@ -980,13 +922,81 @@
     `).join('');
 
     $$('.attendance-notice', stack).forEach(installNoticeSwipe);
+    applyNotificationPosition();
+  }
+
+  function installNotificationCenterDrag(center) {
+    let startX = 0;
+    let startY = 0;
+    let startCenterY = 0;
+    let mode = null;
+    let moved = false;
+
+    center.addEventListener('touchstart', e => {
+      if (notificationState.expanded) return;
+      if (e.target.closest('#attendanceNoticeClear')) return;
+
+      const t = e.touches?.[0];
+      if (!t) return;
+
+      startX = t.clientX;
+      startY = t.clientY;
+      const rect = center.getBoundingClientRect();
+      startCenterY = rect.top + rect.height / 2;
+      mode = null;
+      moved = false;
+      notificationState.dragging = false;
+      notificationState.moved = false;
+    }, {passive:true});
+
+    center.addEventListener('touchmove', e => {
+      if (notificationState.expanded) return;
+      const t = e.touches?.[0];
+      if (!t) return;
+
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+
+      if (!mode && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
+        mode = Math.abs(dy) > Math.abs(dx) ? 'drag-y' : 'swipe-x';
+      }
+
+      if (mode !== 'drag-y') return;
+
+      e.preventDefault();
+      moved = true;
+      notificationState.dragging = true;
+      notificationState.moved = true;
+      center.classList.add('dragging');
+
+      notificationState.y = clampNotificationY(startCenterY + dy, center);
+      center.style.top = `${notificationState.y}px`;
+    }, {passive:false});
+
+    const finish = () => {
+      if (notificationState.dragging) {
+        center.classList.remove('dragging');
+        saveNotificationPosition();
+      }
+      notificationState.dragging = false;
+      mode = null;
+
+      if (moved) {
+        setTimeout(() => {
+          notificationState.moved = false;
+        }, 160);
+      }
+    };
+
+    center.addEventListener('touchend', finish, {passive:true});
+    center.addEventListener('touchcancel', finish, {passive:true});
   }
 
   function installNoticeSwipe(card) {
     let startX = 0;
     let startY = 0;
     let dx = 0;
-    let active = false;
+    let mode = null;
 
     card.addEventListener('touchstart', e => {
       const t = e.touches?.[0];
@@ -994,29 +1004,36 @@
       startX = t.clientX;
       startY = t.clientY;
       dx = 0;
-      active = true;
-      card.classList.add('swiping');
+      mode = null;
       card.dataset.justSwiped = '0';
     }, {passive:true});
 
     card.addEventListener('touchmove', e => {
-      if (!active) return;
       const t = e.touches?.[0];
       if (!t) return;
-      const dy = t.clientY - startY;
-      dx = Math.max(0, t.clientX - startX);
-      if (Math.abs(dx) > Math.abs(dy) && dx > 6) {
-        card.style.transform = `translateX(${dx}px)`;
-        card.style.opacity = String(Math.max(.18, 1 - dx / 260));
+
+      const rawDx = t.clientX - startX;
+      const rawDy = t.clientY - startY;
+
+      if (!mode && (Math.abs(rawDx) > 6 || Math.abs(rawDy) > 6)) {
+        mode = Math.abs(rawDx) > Math.abs(rawDy) ? 'horizontal' : 'vertical';
       }
-    }, {passive:true});
+
+      if (mode !== 'horizontal') return;
+
+      dx = Math.max(0, rawDx);
+      if (dx <= 0) return;
+
+      e.preventDefault();
+      card.classList.add('swiping');
+      card.style.transform = `translateX(${dx}px)`;
+      card.style.opacity = String(Math.max(.18, 1 - dx / 280));
+    }, {passive:false});
 
     card.addEventListener('touchend', () => {
-      if (!active) return;
-      active = false;
       card.classList.remove('swiping');
 
-      if (dx > 82) {
+      if (mode === 'horizontal' && dx > 86) {
         card.dataset.justSwiped = '1';
         const id = card.dataset.noticeId;
         card.style.transform = 'translateX(120%)';
@@ -1025,9 +1042,12 @@
       } else {
         card.style.transform = '';
         card.style.opacity = '';
-        setTimeout(() => { card.dataset.justSwiped = '0'; }, 80);
+        setTimeout(() => { card.dataset.justSwiped = '0'; }, 100);
       }
-    });
+
+      mode = null;
+      dx = 0;
+    }, {passive:true});
   }
 
   function removeNotification(id) {
@@ -1043,18 +1063,21 @@
 
     ensureNotificationCenter();
 
-    const item = {
+    notificationState.items.push({
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       name: person?.name || '이름 없음',
       phone: person?.phone || '----',
       org: person?.org || '소속 없음',
       status,
       createdAt: new Date().toISOString()
-    };
+    });
 
-    notificationState.items.push(item);
     notificationState.items = notificationState.items.slice(-30);
     notificationState.expanded = false;
+
+    // New alerts always appear in the center, as requested.
+    notificationState.y = defaultNotificationY();
+    saveNotificationPosition();
     saveNotificationState();
     renderNotificationCenter();
   }
