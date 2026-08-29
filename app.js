@@ -615,6 +615,52 @@
     });
   }
 
+  function formatCheckTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString('ko-KR', {
+      hour:'2-digit',
+      minute:'2-digit',
+      hour12:false
+    });
+  }
+
+  function ensureAttendancePopup() {
+    if ($('#attendancePopup')) return;
+    const popup = document.createElement('div');
+    popup.id = 'attendancePopup';
+    popup.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(18,28,32,.34);display:none;place-items:center;padding:24px;';
+    popup.innerHTML = `
+      <div style="width:min(100%,390px);background:#fff;border-radius:28px;padding:28px 22px;box-shadow:0 24px 80px rgba(20,35,40,.22);text-align:center;">
+        <div style="width:72px;height:72px;border-radius:22px;background:#27c7b7;color:#fff;display:grid;place-items:center;font-size:36px;font-weight:900;margin:0 auto 16px;">✓</div>
+        <div style="font-size:13px;font-weight:900;color:#22a99d;margin-bottom:7px;">QR 출석 완료</div>
+        <strong id="attendancePopupName" style="display:block;font-size:27px;margin-bottom:8px;"></strong>
+        <div id="attendancePopupMeta" style="color:#718087;font-size:14px;line-height:1.6;"></div>
+        <button id="attendancePopupClose" type="button" style="width:100%;height:52px;border:0;border-radius:16px;background:#21b9aa;color:#fff;font-weight:900;font-size:16px;margin-top:22px;">확인</button>
+      </div>`;
+    document.body.appendChild(popup);
+    $('#attendancePopupClose').addEventListener('click', () => popup.style.display = 'none');
+    popup.addEventListener('click', e => { if (e.target === popup) popup.style.display = 'none'; });
+  }
+
+  function showAttendancePopup(person, checkedAt) {
+    const toggle = $('#popupToggle');
+    if (toggle && !toggle.checked) return;
+    ensureAttendancePopup();
+    const popup = $('#attendancePopup');
+    const name = $('#attendancePopupName');
+    const meta = $('#attendancePopupMeta');
+    if (!popup || !name || !meta) return;
+    name.textContent = person?.name || '참가자';
+    const parts = [person?.org || '소속 없음'];
+    if (person?.phone) parts.push(`•••• ${person.phone}`);
+    const t = formatCheckTime(checkedAt);
+    if (t) parts.push(`출석 ${t}`);
+    meta.textContent = parts.join(' · ');
+    popup.style.display = 'grid';
+  }
+
   function renderPeople() {
     const list = $('#peopleList');
     if (!list) return;
@@ -636,7 +682,7 @@
         <div class="avatar">${escapeHtml(p.name.slice(0,1))}</div>
         <div class="person-main">
           <strong>${escapeHtml(p.name)}</strong>
-          <small>${escapeHtml(p.org || '소속 없음')}${p.phone ? ` · •••• ${escapeHtml(p.phone)}` : ''}</small>
+          <small>${escapeHtml(p.org || '소속 없음')}${p.phone ? ` · •••• ${escapeHtml(p.phone)}` : ''}${p.status === 'present' && p.checkedAt ? ` · ${escapeHtml(formatCheckTime(p.checkedAt))}` : ''}</small>
         </div>
         <button class="status-button ${p.status}" data-person="${p.linkId}">
           ${labelFor(p.status)}
@@ -662,7 +708,7 @@
       <div class="status-row">
         <div>
           <strong>${escapeHtml(p.name)}</strong>
-          <small>${escapeHtml(p.org || '소속 없음')}</small>
+          <small>${escapeHtml(p.org || '소속 없음')}${p.status === 'present' && p.checkedAt ? ` · 출석 ${escapeHtml(formatCheckTime(p.checkedAt))}` : ''}</small>
         </div>
         <span class="badge ${p.status}">${labelFor(p.status)}</span>
       </div>
@@ -793,9 +839,19 @@
           table:'event_participants',
           filter:`event_id=eq.${state.event.id}`
         },
-        async () => {
+        async (payload) => {
+          const isQrCheckIn =
+            payload?.eventType === 'UPDATE' &&
+            payload?.new?.attendance_status === 'checked_in' &&
+            payload?.new?.check_source === 'qr';
+          const participantId = payload?.new?.participant_id || null;
+          const checkedAt = payload?.new?.checked_at || null;
           await loadPeople();
           renderAll();
+          if (isQrCheckIn) {
+            const person = state.people.find(p => p.participantId === participantId);
+            showAttendancePopup(person, checkedAt);
+          }
         }
       )
       .subscribe();
@@ -857,6 +913,7 @@
 
   async function init() {
     ensureLoginUI();
+    ensureAttendancePopup();
     wireUI();
 
     if (!sb) {
