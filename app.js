@@ -35,6 +35,11 @@
     event: null,
     people: [],
     logs: [],
+    historyEvents: [],
+    historyOffset: 0,
+    historyHasMore: false,
+    historySelectedEvent: null,
+    historyDeleteContext: null,
     filter: 'all',
     search: '',
     channel: null,
@@ -2221,7 +2226,602 @@
     if (screen === 'status') {
       loadAttendanceLogs().then(renderStatus).catch(console.error);
     }
+    if (screen === 'history') {
+      loadPastEvents(true).catch(console.error);
+    }
     window.scrollTo({top:0, behavior:'smooth'});
+  }
+
+  function ensureHistoryUI() {
+    if ($('#historyButton')) return;
+
+    const homeActions = $('.list-card.compact-actions');
+    if (homeActions) {
+      const button = document.createElement('button');
+      button.id = 'historyButton';
+      button.type = 'button';
+      button.dataset.go = 'history';
+      button.innerHTML = `
+        <span class="row-icon mint" style="font-weight:900;">≡</span>
+        <div><strong>지난 행사 기록</strong><small>종료된 행사 · 명단 · 출석 기록</small></div>
+        <span class="chev">›</span>
+      `;
+      homeActions.appendChild(button);
+    }
+
+    const style = document.createElement('style');
+    style.textContent = `
+      .history-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 12px}
+      .history-danger-button{border:1px solid #ffd7da;background:#fff6f6;color:#d94d55;border-radius:13px;padding:10px 12px;font-size:13px;font-weight:850}
+      .history-list{display:grid;gap:10px}
+      .history-card{background:#fff;border:1px solid #e6ecee;border-radius:20px;padding:16px;box-shadow:0 5px 18px rgba(28,54,61,.05)}
+      .history-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+      .history-card-date{color:#159f93;font-size:12px;font-weight:900;margin-bottom:4px}
+      .history-card h3{font-size:17px;margin:0 0 4px;line-height:1.25}
+      .history-card-location{color:#7c888e;font-size:12px}
+      .history-card-open{border:0;background:#f0faf8;color:#159f93;border-radius:12px;padding:8px 10px;font-weight:850;flex:0 0 auto}
+      .history-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-top:13px}
+      .history-stat{background:#f8fafb;border-radius:12px;padding:8px 4px;text-align:center}
+      .history-stat span{display:block;color:#899399;font-size:9px;font-weight:800;white-space:nowrap}
+      .history-stat b{display:block;margin-top:3px;font-size:16px;color:#253036}
+      .history-more{width:100%;height:46px;margin-top:12px;border:1px solid #dce7e8;background:#fff;color:#159f93;border-radius:14px;font-weight:850}
+      #historyDetailDialog,#historyDeleteDialog{width:min(calc(100% - 28px),460px);border:0;border-radius:26px;padding:0;background:#fff;box-shadow:0 22px 70px rgba(20,39,45,.24)}
+      #historyDetailDialog::backdrop,#historyDeleteDialog::backdrop{background:rgba(18,26,30,.36);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+      .history-dialog-body{box-sizing:border-box;padding:22px 18px 20px;max-height:82dvh;overflow-y:auto;-webkit-overflow-scrolling:touch}
+      .history-dialog-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+      .history-dialog-head h2{font-size:21px;margin:0 0 4px}
+      .history-dialog-head p{margin:0;color:#7f8a90;font-size:12px}
+      .history-close{border:0;background:#f1f3f4;width:38px;height:38px;border-radius:50%;font-size:23px;color:#596267;flex:0 0 auto}
+      .history-detail-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}
+      .history-detail-summary div{background:#f7fafb;border-radius:14px;padding:11px 6px;text-align:center}
+      .history-detail-summary span{display:block;color:#879197;font-size:10px;font-weight:800}
+      .history-detail-summary b{display:block;font-size:18px;margin-top:3px}
+      .history-section-title{font-size:15px;font-weight:900;margin:18px 0 7px}
+      .history-person-row,.history-log-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid #edf1f2;padding:11px 2px}
+      .history-person-row:first-child,.history-log-row:first-child{border-top:0}
+      .history-person-row strong,.history-log-row strong{display:block;font-size:13px}
+      .history-person-row small,.history-log-row small{display:block;color:#859096;font-size:11px;margin-top:2px}
+      .history-status{font-size:11px;font-weight:900;color:#159f93;white-space:nowrap}
+      .history-empty{padding:18px 4px;text-align:center;color:#879197;font-size:13px}
+      .history-delete-event{width:100%;height:48px;border:1px solid #ffcfd3;background:#fff5f6;color:#d94d55;border-radius:15px;font-weight:900;margin-top:18px}
+      .history-delete-form label{display:block;font-size:12px;font-weight:850;margin:13px 0 6px}
+      .history-delete-form select,.history-delete-form input{box-sizing:border-box;width:100%;height:48px;border:1px solid #dfe7e9;border-radius:14px;padding:0 12px;background:#fff;font-size:15px}
+      .history-preview-button{width:100%;height:48px;border:0;background:#eff9f7;color:#159f93;border-radius:14px;font-weight:900;margin-top:14px}
+      .history-delete-warning{margin-top:14px;padding:14px;border-radius:15px;background:#fff4f5;border:1px solid #ffd7da;color:#b53c45;font-size:13px;line-height:1.5;font-weight:750}
+      .history-final-delete{width:100%;height:50px;border:0;background:#d94d55;color:#fff;border-radius:15px;font-weight:900;margin-top:12px}
+      .history-final-delete[hidden]{display:none}
+      .history-delete-note{color:#8b959a;font-size:11px;line-height:1.45;margin-top:10px}
+    `;
+    document.head.appendChild(style);
+
+    const screen = document.createElement('section');
+    screen.className = 'screen';
+    screen.dataset.screen = 'history';
+    screen.innerHTML = `
+      <div class="section-title">
+        <div><span class="eyebrow">기록 보관</span><h2>지난 행사 기록</h2></div>
+      </div>
+      <div class="history-toolbar">
+        <span id="historyCountText" style="color:#7f8b91;font-size:12px;font-weight:800;">종료 행사 불러오는 중</span>
+        <button type="button" class="history-danger-button" id="historyPeriodDelete">기간별 완전 삭제</button>
+      </div>
+      <div id="historyList" class="history-list"></div>
+      <button type="button" id="historyMore" class="history-more" hidden>20개 더 보기</button>
+    `;
+    $('#appMain')?.appendChild(screen);
+
+    const detail = document.createElement('dialog');
+    detail.id = 'historyDetailDialog';
+    detail.innerHTML = `
+      <div class="history-dialog-body">
+        <div class="history-dialog-head">
+          <div><h2 id="historyDetailTitle">행사 기록</h2><p id="historyDetailMeta"></p></div>
+          <button type="button" class="history-close" id="historyDetailClose" aria-label="닫기">×</button>
+        </div>
+        <div id="historyDetailContent"></div>
+        <button type="button" class="history-delete-event" id="historyDeleteEventButton">이 행사 완전 삭제</button>
+      </div>
+    `;
+    document.body.appendChild(detail);
+
+    const del = document.createElement('dialog');
+    del.id = 'historyDeleteDialog';
+    del.innerHTML = `
+      <div class="history-dialog-body history-delete-form">
+        <div class="history-dialog-head">
+          <div><h2>완전 삭제</h2><p>삭제한 자료는 복구할 수 없습니다.</p></div>
+          <button type="button" class="history-close" id="historyDeleteClose" aria-label="닫기">×</button>
+        </div>
+        <div id="historyDeleteRangeFields">
+          <label>삭제 범위</label>
+          <select id="historyDeleteScope">
+            <option value="day">일별</option>
+            <option value="month">월별</option>
+            <option value="year">년별</option>
+          </select>
+          <label id="historyDeleteValueLabel">날짜</label>
+          <input id="historyDeleteValue" type="date">
+          <button type="button" class="history-preview-button" id="historyDeletePreview">삭제 대상 확인</button>
+        </div>
+        <div id="historyDeleteWarning" class="history-delete-warning" hidden></div>
+        <button type="button" id="historyFinalDelete" class="history-final-delete" hidden>완전 삭제</button>
+        <div class="history-delete-note">종료된 행사만 삭제합니다. 진행 중인 행사는 기간 삭제 대상에서 제외됩니다.</div>
+      </div>
+    `;
+    document.body.appendChild(del);
+
+    $('#historyMore')?.addEventListener('click', () => loadPastEvents(false));
+    $('#historyPeriodDelete')?.addEventListener('click', openPeriodDeleteDialog);
+    $('#historyDetailClose')?.addEventListener('click', () => detail.close());
+    $('#historyDeleteClose')?.addEventListener('click', () => del.close());
+    $('#historyDeleteEventButton')?.addEventListener('click', () => {
+      const id = state.historySelectedEvent?.id;
+      if (id) openEventDeleteDialog(id);
+    });
+    $('#historyDeleteScope')?.addEventListener('change', syncHistoryDeleteInput);
+    $('#historyDeletePreview')?.addEventListener('click', previewHistoryDelete);
+    $('#historyFinalDelete')?.addEventListener('click', executeHistoryDelete);
+    syncHistoryDeleteInput();
+  }
+
+  function historyStatusLabel(person) {
+    if (person.travel_mode === 'individual') return '개인출발';
+    if (person.attendance_status === 'arrived' || person.arrived_at) return '현장도착';
+    if (person.attendance_status === 'checked_in' || person.checked_at) return '출석';
+    if (person.attendance_status === 'absent') return '결석';
+    if (person.attendance_status === 'cancelled') return '취소';
+    return '미확인';
+  }
+
+  async function loadPastEvents(reset=true) {
+    if (!state.member?.organization_id) return;
+    if (reset) {
+      state.historyOffset = 0;
+      state.historyEvents = [];
+    }
+
+    const from = state.historyOffset;
+    const to = from + 19;
+    const { data, error, count } = await sb
+      .from('events')
+      .select('id,title,event_date,location,status,created_at', { count:'exact' })
+      .eq('organization_id', state.member.organization_id)
+      .eq('status', 'ended')
+      .order('event_date', { ascending:false })
+      .order('created_at', { ascending:false })
+      .range(from, to);
+
+    if (error) {
+      console.error('history events error:', error);
+      toast('지난 행사 기록을 불러오지 못했습니다.');
+      return;
+    }
+
+    const rows = data || [];
+    const ids = rows.map(x => x.id);
+    const stats = new Map();
+
+    if (ids.length) {
+      const { data: links, error: linkError } = await sb
+        .from('event_participants')
+        .select('event_id,attendance_status,travel_mode,checked_at,arrived_at')
+        .in('event_id', ids);
+
+      if (linkError) {
+        console.error('history stats error:', linkError);
+      } else {
+        for (const row of links || []) {
+          if (!stats.has(row.event_id)) {
+            stats.set(row.event_id, { total:0,present:0,individual:0,unknown:0,arrived:0 });
+          }
+          const s = stats.get(row.event_id);
+          s.total += 1;
+          const individual = row.travel_mode === 'individual';
+          const present = !individual && (row.attendance_status === 'checked_in' || row.attendance_status === 'arrived' || Boolean(row.checked_at));
+          if (individual) s.individual += 1;
+          else if (present) s.present += 1;
+          else s.unknown += 1;
+          if (row.attendance_status === 'arrived' || row.arrived_at) s.arrived += 1;
+        }
+      }
+    }
+
+    const mapped = rows.map(e => ({
+      ...e,
+      stats: stats.get(e.id) || { total:0,present:0,individual:0,unknown:0,arrived:0 }
+    }));
+
+    state.historyEvents = reset ? mapped : [...state.historyEvents, ...mapped];
+    state.historyOffset = state.historyEvents.length;
+    state.historyHasMore = rows.length === 20;
+    renderPastEvents(count ?? state.historyEvents.length);
+  }
+
+  function renderPastEvents(totalCount=state.historyEvents.length) {
+    const list = $('#historyList');
+    if (!list) return;
+
+    const countText = $('#historyCountText');
+    if (countText) countText.textContent = `종료 행사 ${totalCount}건`;
+
+    if (!state.historyEvents.length) {
+      list.innerHTML = '<div class="empty-state">보관된 종료 행사가 없습니다.</div>';
+    } else {
+      list.innerHTML = state.historyEvents.map(e => `
+        <article class="history-card">
+          <div class="history-card-top">
+            <div style="min-width:0;">
+              <div class="history-card-date">${escapeHtml((e.event_date || '').replaceAll('-','.'))}</div>
+              <h3>${escapeHtml(e.title || '행사')}</h3>
+              <div class="history-card-location">${escapeHtml(e.location || '장소 없음')}</div>
+            </div>
+            <button type="button" class="history-card-open" data-history-open="${e.id}">보기</button>
+          </div>
+          <div class="history-stats">
+            <div class="history-stat"><span>전체</span><b>${e.stats.total}</b></div>
+            <div class="history-stat"><span>출석</span><b>${e.stats.present}</b></div>
+            <div class="history-stat"><span>도착</span><b>${e.stats.arrived}</b></div>
+            <div class="history-stat"><span>개인</span><b>${e.stats.individual}</b></div>
+            <div class="history-stat"><span>미확인</span><b>${e.stats.unknown}</b></div>
+          </div>
+        </article>
+      `).join('');
+    }
+
+    $$('[data-history-open]', list).forEach(btn => {
+      btn.addEventListener('click', () => openPastEventDetail(btn.dataset.historyOpen));
+    });
+
+    const more = $('#historyMore');
+    if (more) more.hidden = !state.historyHasMore;
+  }
+
+  async function openPastEventDetail(eventId) {
+    const event = state.historyEvents.find(x => x.id === eventId);
+    if (!event) return;
+
+    const [{ data: links, error: linkError }, { data: logs, error: logError }] = await Promise.all([
+      sb.from('event_participants')
+        .select('id,participant_id,attendance_status,travel_mode,checked_at,arrived_at,participants(name,affiliation,phone_last4)')
+        .eq('event_id', eventId)
+        .order('created_at', { ascending:true })
+        .limit(1000),
+      sb.from('attendance_logs')
+        .select('id,participant_id,action,source,created_at,participants(name,affiliation)')
+        .eq('event_id', eventId)
+        .order('created_at', { ascending:false })
+        .limit(1000)
+    ]);
+
+    if (linkError || logError) {
+      console.error('history detail error:', linkError || logError);
+      toast('행사 상세 기록을 불러오지 못했습니다.');
+      return;
+    }
+
+    const people = links || [];
+    const historyLogs = logs || [];
+    const total = people.length;
+    const individual = people.filter(p => p.travel_mode === 'individual').length;
+    const present = people.filter(p => p.travel_mode !== 'individual' && (p.attendance_status === 'checked_in' || p.attendance_status === 'arrived' || p.checked_at)).length;
+    const arrived = people.filter(p => p.attendance_status === 'arrived' || p.arrived_at).length;
+    const unknown = Math.max(0, total - individual - present);
+
+    state.historySelectedEvent = event;
+    $('#historyDetailTitle').textContent = event.title || '행사 기록';
+    $('#historyDetailMeta').textContent = `${event.event_date || ''}${event.location ? ` · ${event.location}` : ''}`;
+
+    const peopleHtml = people.length ? people.map(p => `
+      <div class="history-person-row">
+        <div style="min-width:0;">
+          <strong>${escapeHtml(p.participants?.name || '이름 없음')}</strong>
+          <small>${escapeHtml(p.participants?.affiliation || '소속 없음')}${p.participants?.phone_last4 ? ` · •••• ${escapeHtml(p.participants.phone_last4)}` : ''}</small>
+        </div>
+        <span class="history-status">${escapeHtml(historyStatusLabel(p))}</span>
+      </div>
+    `).join('') : '<div class="history-empty">저장된 명단이 없습니다.</div>';
+
+    const logsHtml = historyLogs.length ? historyLogs.map(log => `
+      <div class="history-log-row">
+        <div style="min-width:0;">
+          <strong>${escapeHtml(log.participants?.name || '참가자')}</strong>
+          <small>${escapeHtml(formatLogDateTime(log.created_at))}</small>
+        </div>
+        <div style="text-align:right;flex:0 0 auto;">
+          <span class="history-status">${escapeHtml(attendanceActionLabel(log.action))}</span>
+          <small>${escapeHtml(attendanceSourceLabel(log.source))}</small>
+        </div>
+      </div>
+    `).join('') : '<div class="history-empty">저장된 출석 변경 기록이 없습니다.</div>';
+
+    $('#historyDetailContent').innerHTML = `
+      <div class="history-detail-summary">
+        <div><span>전체</span><b>${total}</b></div>
+        <div><span>출석</span><b>${present}</b></div>
+        <div><span>현장도착</span><b>${arrived}</b></div>
+        <div><span>개인출발</span><b>${individual}</b></div>
+        <div><span>미확인</span><b>${unknown}</b></div>
+        <div><span>변경기록</span><b>${historyLogs.length}</b></div>
+      </div>
+      <div class="history-section-title">참가자 명단</div>
+      <div>${peopleHtml}</div>
+      <div class="history-section-title">출석 변경 기록</div>
+      <div>${logsHtml}</div>
+    `;
+
+    $('#historyDetailDialog')?.showModal();
+  }
+
+  function syncHistoryDeleteInput() {
+    const scope = $('#historyDeleteScope')?.value || 'day';
+    const input = $('#historyDeleteValue');
+    const label = $('#historyDeleteValueLabel');
+    if (!input || !label) return;
+
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+
+    if (scope === 'day') {
+      label.textContent = '날짜';
+      input.type = 'date';
+      input.value = `${yyyy}-${mm}-${dd}`;
+    } else if (scope === 'month') {
+      label.textContent = '월';
+      input.type = 'month';
+      input.value = `${yyyy}-${mm}`;
+    } else {
+      label.textContent = '연도';
+      input.type = 'number';
+      input.min = '2000';
+      input.max = '2100';
+      input.step = '1';
+      input.value = String(yyyy);
+    }
+    clearHistoryDeletePreview();
+  }
+
+  function clearHistoryDeletePreview() {
+    const warning = $('#historyDeleteWarning');
+    const finalButton = $('#historyFinalDelete');
+    if (warning) {
+      warning.hidden = true;
+      warning.textContent = '';
+    }
+    if (finalButton) finalButton.hidden = true;
+  }
+
+  function openPeriodDeleteDialog() {
+    state.historyDeleteContext = { type:'range' };
+    $('#historyDeleteRangeFields').hidden = false;
+    clearHistoryDeletePreview();
+    syncHistoryDeleteInput();
+    $('#historyDeleteDialog')?.showModal();
+  }
+
+  async function openEventDeleteDialog(eventId) {
+    const event = state.historyEvents.find(x => x.id === eventId) || state.historySelectedEvent;
+    if (!event || event.status !== 'ended') return;
+    state.historyDeleteContext = { type:'event', eventId:event.id };
+    $('#historyDeleteRangeFields').hidden = true;
+    clearHistoryDeletePreview();
+    $('#historyDeleteDialog')?.showModal();
+    await previewHistoryDelete();
+  }
+
+  function monthRange(value) {
+    const match = /^(\d{4})-(\d{2})$/.exec(value || '');
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const last = new Date(year, month, 0).getDate();
+    return [`${match[1]}-${match[2]}-01`, `${match[1]}-${match[2]}-${String(last).padStart(2,'0')}`];
+  }
+
+  async function getHistoryDeleteTargets() {
+    if (!state.member?.organization_id || !state.historyDeleteContext) return [];
+
+    let query = sb
+      .from('events')
+      .select('id,title,event_date,status')
+      .eq('organization_id', state.member.organization_id)
+      .eq('status', 'ended')
+      .order('event_date', { ascending:true });
+
+    if (state.historyDeleteContext.type === 'event') {
+      query = query.eq('id', state.historyDeleteContext.eventId);
+    } else {
+      const scope = $('#historyDeleteScope')?.value || 'day';
+      const value = $('#historyDeleteValue')?.value || '';
+      state.historyDeleteContext.scope = scope;
+      state.historyDeleteContext.value = value;
+
+      if (scope === 'day') {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return [];
+        query = query.eq('event_date', value);
+      } else if (scope === 'month') {
+        const range = monthRange(value);
+        if (!range) return [];
+        query = query.gte('event_date', range[0]).lte('event_date', range[1]);
+      } else {
+        if (!/^\d{4}$/.test(value)) return [];
+        query = query.gte('event_date', `${value}-01-01`).lte('event_date', `${value}-12-31`);
+      }
+    }
+
+    const { data, error } = await query.limit(1000);
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function countRowsForEvents(table, eventIds) {
+    if (!eventIds.length) return 0;
+    let total = 0;
+    for (let i = 0; i < eventIds.length; i += 80) {
+      const batch = eventIds.slice(i, i + 80);
+      const { count, error } = await sb
+        .from(table)
+        .select('*', { count:'exact', head:true })
+        .in('event_id', batch);
+      if (error) throw error;
+      total += count || 0;
+    }
+    return total;
+  }
+
+  function historyDeleteScopeLabel(context, targets) {
+    if (context.type === 'event') {
+      const e = targets[0];
+      return e ? `${e.event_date} · ${e.title}` : '선택 행사';
+    }
+    if (context.scope === 'day') return `${context.value} 하루`;
+    if (context.scope === 'month') return `${context.value} 한 달`;
+    return `${context.value}년`;
+  }
+
+  async function previewHistoryDelete() {
+    try {
+      const targets = await getHistoryDeleteTargets();
+      const warning = $('#historyDeleteWarning');
+      const finalButton = $('#historyFinalDelete');
+      if (!warning || !finalButton) return;
+
+      if (!targets.length) {
+        warning.hidden = false;
+        warning.textContent = '선택한 범위에 삭제할 종료 행사가 없습니다.';
+        finalButton.hidden = true;
+        return;
+      }
+
+      const ids = targets.map(x => x.id);
+      const [participantsCount, logsCount, qrCount] = await Promise.all([
+        countRowsForEvents('event_participants', ids),
+        countRowsForEvents('attendance_logs', ids),
+        countRowsForEvents('qr_tokens', ids)
+      ]);
+
+      state.historyDeleteContext.targets = targets;
+      const scopeLabel = historyDeleteScopeLabel(state.historyDeleteContext, targets);
+      warning.hidden = false;
+      warning.innerHTML = `
+        <strong>${escapeHtml(scopeLabel)}</strong><br>
+        종료 행사 <strong>${targets.length}건</strong>과 참가 명단 연결 <strong>${participantsCount}건</strong>,
+        출석 기록 <strong>${logsCount}건</strong>, QR 기록 <strong>${qrCount}건</strong>을 완전히 삭제합니다.<br>
+        <strong>삭제 후 복구할 수 없습니다.</strong>
+      `;
+      finalButton.hidden = false;
+    } catch (error) {
+      console.error('history delete preview error:', error);
+      toast('삭제 대상을 확인하지 못했습니다.');
+    }
+  }
+
+  async function fetchCandidateParticipantIds(eventIds) {
+    const ids = new Set();
+    for (let start = 0; ; start += 1000) {
+      const { data, error } = await sb
+        .from('event_participants')
+        .select('participant_id')
+        .in('event_id', eventIds)
+        .range(start, start + 999);
+      if (error) throw error;
+      for (const row of data || []) {
+        if (row.participant_id) ids.add(row.participant_id);
+      }
+      if (!data || data.length < 1000) break;
+    }
+    return [...ids];
+  }
+
+  async function deleteEventsInBatches(eventIds) {
+    for (let i = 0; i < eventIds.length; i += 80) {
+      const batch = eventIds.slice(i, i + 80);
+      const { error } = await sb
+        .from('events')
+        .delete()
+        .eq('organization_id', state.member.organization_id)
+        .eq('status', 'ended')
+        .in('id', batch);
+      if (error) throw error;
+    }
+  }
+
+  async function cleanupOrphanParticipants(candidateIds) {
+    if (!candidateIds.length) return 0;
+    let deleted = 0;
+
+    for (let i = 0; i < candidateIds.length; i += 80) {
+      const batch = candidateIds.slice(i, i + 80);
+      const { data: remainingLinks, error: linkError } = await sb
+        .from('event_participants')
+        .select('participant_id')
+        .in('participant_id', batch)
+        .limit(1000);
+      if (linkError) throw linkError;
+
+      const used = new Set((remainingLinks || []).map(x => x.participant_id));
+      const orphanIds = batch.filter(id => !used.has(id));
+      if (!orphanIds.length) continue;
+
+      const { error: deleteError } = await sb
+        .from('participants')
+        .delete()
+        .eq('organization_id', state.member.organization_id)
+        .in('id', orphanIds);
+      if (deleteError) throw deleteError;
+      deleted += orphanIds.length;
+    }
+    return deleted;
+  }
+
+  async function executeHistoryDelete() {
+    const button = $('#historyFinalDelete');
+    if (!button || !state.historyDeleteContext) return;
+
+    button.disabled = true;
+    button.textContent = '완전 삭제 중…';
+
+    try {
+      const targets = await getHistoryDeleteTargets();
+      if (!targets.length) {
+        toast('삭제할 종료 행사가 없습니다.');
+        clearHistoryDeletePreview();
+        return;
+      }
+
+      const eventIds = targets.map(x => x.id);
+      const candidateIds = await fetchCandidateParticipantIds(eventIds);
+      const deletedCurrent = Boolean(state.event && eventIds.includes(state.event.id));
+
+      await deleteEventsInBatches(eventIds);
+      const orphanCount = await cleanupOrphanParticipants(candidateIds);
+
+      if (deletedCurrent) {
+        state.event = null;
+        state.previousEvent = null;
+        state.people = [];
+        state.logs = [];
+        state.qrToken = null;
+        state.arrivalQrToken = null;
+        state.awaitingNewEvent = true;
+        try { localStorage.removeItem(QR_NEXT_EVENT_KEY); } catch {}
+        renderAll();
+      }
+
+      $('#historyDeleteDialog')?.close();
+      $('#historyDetailDialog')?.close();
+      state.historySelectedEvent = null;
+      state.historyDeleteContext = null;
+      await loadPastEvents(true);
+      toast(`행사 ${targets.length}건 완전 삭제 · 미사용 참가자 ${orphanCount}명 정리`);
+    } catch (error) {
+      console.error('history delete error:', error);
+      toast(`완전 삭제 실패 · ${error.message || '권한 또는 연결 확인'}`);
+    } finally {
+      button.disabled = false;
+      button.textContent = '완전 삭제';
+    }
   }
 
   function escapeHtml(v='') {
@@ -2239,6 +2839,7 @@
     ensureEventRegistrationUI();
     ensureParticipantEditUI();
     ensureStatusDashboardUI();
+    ensureHistoryUI();
     loadNotificationState();
     ensureNotificationCenter();
     renderNotificationCenter();
