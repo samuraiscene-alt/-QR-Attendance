@@ -2444,6 +2444,17 @@
         color:#159f93;font-size:13px;font-weight:900;padding:10px;
       }
       .ocr-source-button small{display:block;color:#879399;font-size:10px;font-weight:700;margin-top:4px}
+      .ocr-hidden-file-input{
+        position:fixed!important;
+        left:-9999px!important;
+        top:-9999px!important;
+        width:1px!important;
+        height:1px!important;
+        opacity:0!important;
+        overflow:hidden!important;
+        clip-path:inset(50%)!important;
+        pointer-events:none!important;
+      }
       .ocr-privacy{
         margin:11px 0 0;padding:11px 12px;border-radius:14px;background:#f4fbfa;
         color:#61747a;font-size:10px;line-height:1.5;
@@ -2501,8 +2512,8 @@
           <button type="button" class="ocr-source-button" id="ocrCameraButton">카메라 촬영<small>지금 종이 명단 촬영</small></button>
           <button type="button" class="ocr-source-button" id="ocrPhotoButton">사진 선택<small>사진 보관함 · 파일</small></button>
         </div>
-        <input id="ocrCameraInput" type="file" accept="image/*" capture="environment" hidden>
-        <input id="ocrPhotoInput" type="file" accept="image/*" hidden>
+        <input id="ocrCameraInput" class="ocr-hidden-file-input" type="file" accept="image/*" capture="environment" aria-hidden="true" tabindex="-1">
+        <input id="ocrPhotoInput" class="ocr-hidden-file-input" type="file" accept="image/*" aria-hidden="true" tabindex="-1">
 
         <div class="ocr-privacy">사진은 Supabase나 Google Sheets에 저장하지 않고, 이 기기에서 글자를 읽은 뒤 명단 데이터만 등록합니다.</div>
 
