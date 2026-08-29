@@ -685,12 +685,12 @@
           <small>${escapeHtml(p.org || '소속 없음')}${p.phone ? ` · •••• ${escapeHtml(p.phone)}` : ''}</small>
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">
-          <button class="status-button ${p.status}" data-person="${p.linkId}"${p.status === 'present' ? ' style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;"' : ''}>
-            ${labelFor(p.status)}
-          </button>
           ${p.status === 'present' && p.checkedAt
             ? `<span class="status-button present" style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;">${escapeHtml(formatCheckTime(p.checkedAt))}</span>`
             : ''}
+          <button class="status-button ${p.status}" data-person="${p.linkId}"${p.status === 'present' ? ' style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;"' : ''}>
+            ${labelFor(p.status)}
+          </button>
         </div>
       </div>
     `).join('');
@@ -716,10 +716,10 @@
           <small>${escapeHtml(p.org || '소속 없음')}</small>
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">
-          <span class="badge ${p.status}"${p.status === 'present' ? ' style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;"' : ''}>${labelFor(p.status)}</span>
           ${p.status === 'present' && p.checkedAt
             ? `<span class="badge present" style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;">${escapeHtml(formatCheckTime(p.checkedAt))}</span>`
             : ''}
+          <span class="badge ${p.status}"${p.status === 'present' ? ' style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;"' : ''}>${labelFor(p.status)}</span>
         </div>
       </div>
     `).join('');
