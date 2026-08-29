@@ -45,6 +45,7 @@
   };
 
   const QR_NEXT_EVENT_KEY = 'qr-attendance-awaiting-new-event-v22';
+  const CURRENT_EVENT_KEY = 'qr-attendance-current-event-v26';
 
   function ensureLoginUI() {
     if ($('#authGate')) return;
@@ -288,6 +289,7 @@
       installLogout();
       await loadLatestEvent();
       await loadPeople();
+      await ensureManualEndQrValidity();
       await loadGatheringQr();
       subscribeRealtime();
       renderAll();
@@ -412,19 +414,61 @@
   }
 
   async function loadLatestEvent() {
-    const { data, error } = await sb
-      .from('events')
-      .select('id,title,event_date,location,status,starts_at,ends_at')
-      .eq('organization_id', state.member.organization_id)
-      .order('event_date', { ascending:false })
-      .order('created_at', { ascending:false })
-      .limit(1);
+    const selectFields = 'id,title,event_date,location,status,starts_at,ends_at';
+    let selected = null;
+    let storedEventId = null;
 
-    if (error) throw error;
-    state.event = data?.[0] || null;
+    try {
+      storedEventId = localStorage.getItem(CURRENT_EVENT_KEY);
+    } catch {}
+
+    // 이 기기에서 마지막으로 작업하던 행사가 있으면 그 행사를 그대로 복원
+    if (storedEventId) {
+      const { data, error } = await sb
+        .from('events')
+        .select(selectFields)
+        .eq('organization_id', state.member.organization_id)
+        .eq('id', storedEventId)
+        .limit(1);
+
+      if (error) throw error;
+      selected = data?.[0] || null;
+    }
+
+    // 저장된 행사가 없으면 가장 최근에 만든 진행 중 행사를 우선 선택
+    if (!selected) {
+      const { data, error } = await sb
+        .from('events')
+        .select(selectFields)
+        .eq('organization_id', state.member.organization_id)
+        .eq('status', 'active')
+        .order('created_at', { ascending:false })
+        .limit(1);
+
+      if (error) throw error;
+      selected = data?.[0] || null;
+    }
+
+    // 진행 중 행사도 없으면 가장 최근에 만든 행사를 선택
+    if (!selected) {
+      const { data, error } = await sb
+        .from('events')
+        .select(selectFields)
+        .eq('organization_id', state.member.organization_id)
+        .order('created_at', { ascending:false })
+        .limit(1);
+
+      if (error) throw error;
+      selected = data?.[0] || null;
+    }
+
+    state.event = selected;
     state.previousEvent = state.event;
 
     try {
+      if (state.event?.id) {
+        localStorage.setItem(CURRENT_EVENT_KEY, state.event.id);
+      }
       const waitingFor = localStorage.getItem(QR_NEXT_EVENT_KEY);
       state.awaitingNewEvent = Boolean(
         state.event &&
@@ -437,19 +481,33 @@
   }
 
 
+  async function ensureManualEndQrValidity() {
+    if (!state.event || state.event.status !== 'active') return;
+
+    const { error } = await sb
+      .from('qr_tokens')
+      .update({ valid_until: null })
+      .eq('event_id', state.event.id)
+      .eq('is_active', true);
+
+    if (error) {
+      console.error('QR manual-end validity error:', error);
+      toast('현재 행사 QR 유효 상태를 확인해주세요.');
+    }
+  }
+
   async function loadGatheringQr() {
     state.qrToken = null;
     state.arrivalQrToken = null;
     if (!state.event) return;
 
-    const now = new Date().toISOString();
     const { data, error } = await sb
       .from('qr_tokens')
       .select('id,event_id,kind,token,is_active,valid_from,valid_until,created_at')
       .eq('event_id', state.event.id)
       .in('kind', ['gathering','arrival'])
       .eq('is_active', true)
-      .gte('valid_until', now)
+      .is('revoked_at', null)
       .order('created_at', { ascending:false });
 
     if (error) {
@@ -663,9 +721,6 @@
     }
 
     const label = selectedKind === 'arrival' ? '현장 QR' : '집결지 QR';
-    const validUntil =
-      selectedToken.valid_until ||
-      new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
     if (shareButton) {
       shareButton.disabled = true;
@@ -679,7 +734,7 @@
           event_id: state.event.id,
           kind: 'proxy',
           proxy_target_kind: selectedKind,
-          valid_until: validUntil,
+          valid_until: null,
           created_by: state.user?.id || null
         })
         .select('id,token,valid_until')
@@ -845,6 +900,7 @@
       state.event = created;
       state.previousEvent = created;
       state.awaitingNewEvent = false;
+      try { localStorage.setItem(CURRENT_EVENT_KEY, created.id); } catch {}
       state.qrToken = null;
       state.arrivalQrToken = null;
       state.qrView = 'gathering';
@@ -870,12 +926,11 @@
       return;
     }
 
-    const validUntil = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
     const { data, error } = await sb
       .from('qr_tokens')
       .insert([
-        { event_id: state.event.id, kind: 'gathering', valid_until: validUntil },
-        { event_id: state.event.id, kind: 'arrival', valid_until: validUntil }
+        { event_id: state.event.id, kind: 'gathering', valid_until: null },
+        { event_id: state.event.id, kind: 'arrival', valid_until: null }
       ])
       .select('id,event_id,kind,token,is_active,valid_from,valid_until,created_at');
 
@@ -890,6 +945,7 @@
     state.qrToken = gathering;
     state.arrivalQrToken = arrival;
     state.qrView = 'gathering';
+    try { localStorage.setItem(CURRENT_EVENT_KEY, state.event.id); } catch {}
 
     const { error: eventError } = await sb
       .from('events')
