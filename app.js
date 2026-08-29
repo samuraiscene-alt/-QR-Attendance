@@ -1800,11 +1800,11 @@
 
     $('#personForm')?.addEventListener('submit', addPerson);
 
-    $('#personDialog .dialog-head button')?.addEventListener('click', (e) => {
+    $('#personDialogClose')?.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      $('#personDialog')?.close();
       $('#personForm')?.reset();
+      $('#personDialog')?.close();
     });
 
     $('#manualButton')?.addEventListener('click', () => go('roster'));
