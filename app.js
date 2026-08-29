@@ -45,7 +45,6 @@
   };
 
   const QR_NEXT_EVENT_KEY = 'qr-attendance-awaiting-new-event-v22';
-  const CURRENT_EVENT_KEY = 'qr-attendance-current-event-v26';
 
   function ensureLoginUI() {
     if ($('#authGate')) return;
@@ -414,61 +413,19 @@
   }
 
   async function loadLatestEvent() {
-    const selectFields = 'id,title,event_date,location,status,starts_at,ends_at';
-    let selected = null;
-    let storedEventId = null;
+    const { data, error } = await sb
+      .from('events')
+      .select('id,title,event_date,location,status,starts_at,ends_at')
+      .eq('organization_id', state.member.organization_id)
+      .order('created_at', { ascending:false })
+      .limit(1);
 
-    try {
-      storedEventId = localStorage.getItem(CURRENT_EVENT_KEY);
-    } catch {}
+    if (error) throw error;
 
-    // 이 기기에서 마지막으로 작업하던 행사가 있으면 그 행사를 그대로 복원
-    if (storedEventId) {
-      const { data, error } = await sb
-        .from('events')
-        .select(selectFields)
-        .eq('organization_id', state.member.organization_id)
-        .eq('id', storedEventId)
-        .limit(1);
-
-      if (error) throw error;
-      selected = data?.[0] || null;
-    }
-
-    // 저장된 행사가 없으면 가장 최근에 만든 진행 중 행사를 우선 선택
-    if (!selected) {
-      const { data, error } = await sb
-        .from('events')
-        .select(selectFields)
-        .eq('organization_id', state.member.organization_id)
-        .eq('status', 'active')
-        .order('created_at', { ascending:false })
-        .limit(1);
-
-      if (error) throw error;
-      selected = data?.[0] || null;
-    }
-
-    // 진행 중 행사도 없으면 가장 최근에 만든 행사를 선택
-    if (!selected) {
-      const { data, error } = await sb
-        .from('events')
-        .select(selectFields)
-        .eq('organization_id', state.member.organization_id)
-        .order('created_at', { ascending:false })
-        .limit(1);
-
-      if (error) throw error;
-      selected = data?.[0] || null;
-    }
-
-    state.event = selected;
+    state.event = data?.[0] || null;
     state.previousEvent = state.event;
 
     try {
-      if (state.event?.id) {
-        localStorage.setItem(CURRENT_EVENT_KEY, state.event.id);
-      }
       const waitingFor = localStorage.getItem(QR_NEXT_EVENT_KEY);
       state.awaitingNewEvent = Boolean(
         state.event &&
@@ -900,7 +857,6 @@
       state.event = created;
       state.previousEvent = created;
       state.awaitingNewEvent = false;
-      try { localStorage.setItem(CURRENT_EVENT_KEY, created.id); } catch {}
       state.qrToken = null;
       state.arrivalQrToken = null;
       state.qrView = 'gathering';
@@ -945,7 +901,6 @@
     state.qrToken = gathering;
     state.arrivalQrToken = arrival;
     state.qrView = 'gathering';
-    try { localStorage.setItem(CURRENT_EVENT_KEY, state.event.id); } catch {}
 
     const { error: eventError } = await sb
       .from('events')
@@ -1844,6 +1799,13 @@
     );
 
     $('#personForm')?.addEventListener('submit', addPerson);
+
+    $('#personDialog .dialog-head button')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      $('#personDialog')?.close();
+      $('#personForm')?.reset();
+    });
 
     $('#manualButton')?.addEventListener('click', () => go('roster'));
     $('#saveSettings')?.addEventListener('click', () => toast('설정 저장 완료'));
