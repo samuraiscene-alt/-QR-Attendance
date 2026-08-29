@@ -37,8 +37,12 @@
     filter: 'all',
     search: '',
     channel: null,
-    qrToken: null
+    qrToken: null,
+    previousEvent: null,
+    awaitingNewEvent: false
   };
+
+  const QR_NEXT_EVENT_KEY = 'qr-attendance-awaiting-new-event-v22';
 
   function ensureLoginUI() {
     if ($('#authGate')) return;
@@ -416,6 +420,18 @@
 
     if (error) throw error;
     state.event = data?.[0] || null;
+    state.previousEvent = state.event;
+
+    try {
+      const waitingFor = localStorage.getItem(QR_NEXT_EVENT_KEY);
+      state.awaitingNewEvent = Boolean(
+        state.event &&
+        state.event.status === 'ended' &&
+        waitingFor === state.event.id
+      );
+    } catch {
+      state.awaitingNewEvent = false;
+    }
   }
 
 
@@ -448,19 +464,77 @@
     return url.toString();
   }
 
+  function renderQrPlaceholder() {
+    const qrBox = $('.fake-qr');
+    if (!qrBox) return;
+
+    qrBox.removeAttribute('style');
+    qrBox.innerHTML = `
+      <div class="finder f1"></div>
+      <div class="finder f2"></div>
+      <div class="finder f3"></div>
+      <div class="pixels"></div>
+    `;
+  }
+
+  function currentQrCycle() {
+    if (!state.event || state.awaitingNewEvent) return 'new_event';
+    if (state.event.status === 'ended') return 'refresh';
+    if (state.qrToken?.token || state.event.status === 'active') return 'active';
+    return 'ready';
+  }
+
   function renderQr() {
     const qrBox = $('.fake-qr');
     const qrPanel = $('.qr-panel');
     const pill = $('[data-screen="qr"] .pill');
     if (!qrBox || !qrPanel) return;
 
+    const title = qrPanel.querySelector('h3');
     const desc = qrPanel.querySelector('p');
     const startBtn = $('#demoStart');
+    const shareBtn = $('#demoShare');
+    const cycle = currentQrCycle();
+
+    if (cycle === 'new_event') {
+      renderQrPlaceholder();
+      if (pill) pill.textContent = '다음 행사 준비';
+      if (title) title.textContent = '새 행사 등록';
+      if (desc) desc.textContent = state.event
+        ? '이전 행사는 종료되었습니다. 다음 행사를 먼저 등록해주세요.'
+        : '새 행사를 등록한 뒤 QR을 생성할 수 있습니다.';
+      if (startBtn) startBtn.textContent = '새 행사 등록';
+      if (shareBtn) shareBtn.disabled = true;
+      return;
+    }
+
+    if (cycle === 'refresh') {
+      renderQrPlaceholder();
+      if (pill) pill.textContent = '행사 종료';
+      if (title) title.textContent = '행사가 종료되었습니다';
+      if (desc) desc.textContent = 'QR 새로고침을 누르면 다음 행사 등록 단계로 넘어갑니다.';
+      if (startBtn) startBtn.textContent = 'QR 새로고침';
+      if (shareBtn) shareBtn.disabled = true;
+      return;
+    }
+
+    if (cycle === 'ready') {
+      renderQrPlaceholder();
+      if (pill) pill.textContent = '준비 전';
+      if (title) title.textContent = '집결지 출석 QR';
+      if (desc) desc.textContent = '원하는 시간에 QR 생성을 누르면 이 행사 전용 QR이 만들어집니다.';
+      if (startBtn) startBtn.textContent = 'QR 생성';
+      if (shareBtn) shareBtn.disabled = true;
+      return;
+    }
 
     if (!state.qrToken?.token) {
-      if (pill) pill.textContent = '준비 전';
-      if (desc) desc.textContent = '행사 시작을 누르면 이 행사 전용 QR이 생성됩니다.';
-      if (startBtn) startBtn.textContent = '행사 시작';
+      renderQrPlaceholder();
+      if (pill) pill.textContent = '진행 중';
+      if (title) title.textContent = '집결지 출석 QR';
+      if (desc) desc.textContent = '행사는 진행 중입니다. QR 정보를 다시 불러오고 있습니다.';
+      if (startBtn) startBtn.textContent = '행사 종료';
+      if (shareBtn) shareBtn.disabled = false;
       return;
     }
 
@@ -478,7 +552,8 @@
     img.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block;';
     qrBox.appendChild(img);
 
-    if (pill) pill.textContent = '실제 QR';
+    if (pill) pill.textContent = '진행 중';
+    if (title) title.textContent = '집결지 출석 QR';
     if (desc) {
       const until = state.qrToken.valid_until
         ? new Date(state.qrToken.valid_until).toLocaleString('ko-KR', {
@@ -486,34 +561,170 @@
           })
         : '';
       desc.textContent = until
-        ? `이 행사 전용 QR입니다. ${until}까지 유효합니다.`
-        : '이 행사 전용 QR입니다.';
+        ? `현재 행사 전용 QR입니다. ${until}까지 유효하며 행사 종료 시 즉시 폐기됩니다.`
+        : '현재 행사 전용 QR입니다. 행사 종료 시 즉시 폐기됩니다.';
     }
-    if (startBtn) startBtn.textContent = 'QR 새로고침';
+    if (startBtn) startBtn.textContent = '행사 종료';
+    if (shareBtn) shareBtn.disabled = false;
   }
 
-  async function startEventQr() {
+  function ensureEventRegistrationUI() {
+    if ($('#eventRegistrationDialog')) return;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #eventRegistrationDialog{
+        width:min(calc(100% - 30px),430px);border:0;border-radius:26px;padding:0;
+        box-shadow:0 22px 70px rgba(20,39,45,.22);background:#fff
+      }
+      #eventRegistrationDialog::backdrop{background:rgba(18,26,30,.34);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+      .event-reg-form{padding:24px 20px 20px}
+      .event-reg-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+      .event-reg-head strong{font-size:22px}
+      .event-reg-close{border:0;background:#f1f3f4;width:38px;height:38px;border-radius:50%;font-size:23px;color:#596267}
+      .event-reg-form label{display:block;font-size:13px;font-weight:850;margin:13px 0 6px}
+      .event-reg-form input{box-sizing:border-box;width:100%;height:50px;border:1px solid #dfe7e9;border-radius:15px;padding:0 14px;font-size:16px;background:#fff}
+      .roster-choice{display:grid;gap:9px;margin:8px 0 18px}
+      .roster-choice label{display:flex;align-items:center;gap:10px;margin:0;padding:13px 14px;border:1px solid #e2e8e9;border-radius:15px;font-size:14px;background:#fbfdfd}
+      .roster-choice input{width:20px;height:20px;margin:0;accent-color:#1eb9aa}
+      #eventRegistrationMessage{min-height:20px;margin:8px 0;color:#d94d55;font-size:13px;font-weight:750}
+    `;
+    document.head.appendChild(style);
+
+    const dialog = document.createElement('dialog');
+    dialog.id = 'eventRegistrationDialog';
+    dialog.innerHTML = `
+      <form id="eventRegistrationForm" class="event-reg-form">
+        <div class="event-reg-head">
+          <strong>새 행사 등록</strong>
+          <button type="button" class="event-reg-close" id="eventRegistrationClose" aria-label="닫기">×</button>
+        </div>
+        <label>행사명</label>
+        <input id="newEventTitle" maxlength="80" placeholder="예: 가을 야유회" required>
+        <label>행사 날짜</label>
+        <input id="newEventDate" type="date" required>
+        <label>장소</label>
+        <input id="newEventLocation" maxlength="120" placeholder="예: 서울역 1번 출구">
+        <label>명단</label>
+        <div class="roster-choice" id="newEventRosterChoice">
+          <label><input type="radio" name="rosterMode" value="new" checked> 새 명단으로 시작</label>
+          <label id="copyPreviousRosterLabel"><input type="radio" name="rosterMode" value="copy"> 이전 행사 명단 불러오기</label>
+        </div>
+        <div id="eventRegistrationMessage"></div>
+        <button type="submit" class="primary-button" id="eventRegistrationSave">행사 등록</button>
+      </form>
+    `;
+    document.body.appendChild(dialog);
+
+    $('#eventRegistrationClose').addEventListener('click', () => dialog.close());
+    $('#eventRegistrationForm').addEventListener('submit', createNewEvent);
+  }
+
+  function openEventRegistration() {
+    ensureEventRegistrationUI();
+    const dialog = $('#eventRegistrationDialog');
+    const form = $('#eventRegistrationForm');
+    const message = $('#eventRegistrationMessage');
+    const copyLabel = $('#copyPreviousRosterLabel');
+
+    form?.reset();
+    if (message) message.textContent = '';
+    if ($('#newEventDate')) $('#newEventDate').value = new Date().toISOString().slice(0,10);
+    if (copyLabel) copyLabel.hidden = !state.previousEvent?.id;
+    dialog?.showModal();
+  }
+
+  async function createNewEvent(e) {
+    e.preventDefault();
+    if (!state.member?.organization_id || !state.user?.id) return;
+
+    const title = $('#newEventTitle').value.trim();
+    const eventDate = $('#newEventDate').value;
+    const location = $('#newEventLocation').value.trim();
+    const rosterMode = $('input[name="rosterMode"]:checked', $('#eventRegistrationForm'))?.value || 'new';
+    const message = $('#eventRegistrationMessage');
+    const save = $('#eventRegistrationSave');
+    const previousEventId = state.previousEvent?.id || null;
+
+    if (!title || !eventDate) {
+      message.textContent = '행사명과 행사 날짜를 입력해주세요.';
+      return;
+    }
+
+    save.disabled = true;
+    save.textContent = '등록 중…';
+    message.textContent = '';
+
+    try {
+      const { data: created, error } = await sb
+        .from('events')
+        .insert({
+          organization_id: state.member.organization_id,
+          title,
+          event_date: eventDate,
+          location: location || null,
+          status: 'draft',
+          created_by: state.user.id
+        })
+        .select('id,title,event_date,location,status,starts_at,ends_at')
+        .single();
+
+      if (error) throw error;
+
+      if (rosterMode === 'copy' && previousEventId) {
+        const { data: oldLinks, error: oldError } = await sb
+          .from('event_participants')
+          .select('participant_id')
+          .eq('event_id', previousEventId);
+        if (oldError) throw oldError;
+
+        const rows = (oldLinks || []).map(x => ({
+          event_id: created.id,
+          participant_id: x.participant_id
+        }));
+
+        if (rows.length) {
+          const { error: copyError } = await sb
+            .from('event_participants')
+            .insert(rows);
+          if (copyError) throw copyError;
+        }
+      }
+
+      state.event = created;
+      state.previousEvent = created;
+      state.awaitingNewEvent = false;
+      state.qrToken = null;
+      try { localStorage.removeItem(QR_NEXT_EVENT_KEY); } catch {}
+
+      await loadPeople();
+      subscribeRealtime();
+      renderAll();
+      $('#eventRegistrationDialog')?.close();
+      toast(rosterMode === 'copy' ? '새 행사 등록 · 이전 명단 불러오기 완료' : '새 행사 등록 완료');
+    } catch (err) {
+      console.error('event create error:', err);
+      message.textContent = `행사 등록 실패 · ${err.message || '확인 필요'}`;
+    } finally {
+      save.disabled = false;
+      save.textContent = '행사 등록';
+    }
+  }
+
+  async function createEventQr() {
     if (!state.event) {
-      toast('먼저 행사를 등록해주세요.');
+      openEventRegistration();
       return;
     }
 
-    if (state.qrToken?.token) {
-      renderQr();
-      toast('출석 QR 준비 완료');
-      return;
-    }
-
-    const validUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const validUntil = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
     const { data, error } = await sb
       .from('qr_tokens')
-      .insert({
-        event_id: state.event.id,
-        kind: 'gathering',
-        valid_until: validUntil
-      })
-      .select('id,event_id,kind,token,is_active,valid_from,valid_until,created_at')
-      .single();
+      .insert([
+        { event_id: state.event.id, kind: 'gathering', valid_until: validUntil },
+        { event_id: state.event.id, kind: 'arrival', valid_until: validUntil }
+      ])
+      .select('id,event_id,kind,token,is_active,valid_from,valid_until,created_at');
 
     if (error) {
       console.error('QR create error:', error);
@@ -521,9 +732,85 @@
       return;
     }
 
-    state.qrToken = data;
+    const gathering = (data || []).find(x => x.kind === 'gathering') || null;
+    state.qrToken = gathering;
+
+    const { error: eventError } = await sb
+      .from('events')
+      .update({ status:'active' })
+      .eq('id', state.event.id);
+
+    if (eventError) {
+      console.error('event start error:', eventError);
+      toast('QR은 생성됐지만 행사 상태 변경을 확인해주세요.');
+    } else {
+      state.event.status = 'active';
+      renderAll();
+      toast('집결지 · 현장 QR 생성 완료');
+    }
+  }
+
+  async function endCurrentEvent() {
+    if (!state.event) return;
+
+    const ok = window.confirm('현재 행사를 종료하시겠습니까?\n종료하면 현재 행사 QR은 더 이상 사용할 수 없습니다.');
+    if (!ok) return;
+
+    const { error: qrError } = await sb
+      .from('qr_tokens')
+      .update({ is_active:false })
+      .eq('event_id', state.event.id)
+      .eq('is_active', true);
+
+    if (qrError) {
+      console.error('QR end error:', qrError);
+      toast('QR 종료 처리에 실패했습니다.');
+      return;
+    }
+
+    const { error: eventError } = await sb
+      .from('events')
+      .update({ status:'ended' })
+      .eq('id', state.event.id);
+
+    if (eventError) {
+      console.error('event end error:', eventError);
+      toast('행사 종료 처리에 실패했습니다.');
+      return;
+    }
+
+    state.event.status = 'ended';
+    state.qrToken = null;
+    state.awaitingNewEvent = false;
+    renderAll();
+    toast('행사 종료 · 현재 QR 폐기 완료');
+  }
+
+  function prepareNextEvent() {
+    if (!state.event || state.event.status !== 'ended') return;
+    state.previousEvent = state.event;
+    state.awaitingNewEvent = true;
+    try { localStorage.setItem(QR_NEXT_EVENT_KEY, state.event.id); } catch {}
     renderQr();
-    toast('행사 전용 QR 생성 완료');
+    toast('다음 행사 등록 준비 완료');
+  }
+
+  async function startEventQr() {
+    const cycle = currentQrCycle();
+
+    if (cycle === 'new_event') {
+      openEventRegistration();
+      return;
+    }
+    if (cycle === 'refresh') {
+      prepareNextEvent();
+      return;
+    }
+    if (cycle === 'active') {
+      await endCurrentEvent();
+      return;
+    }
+    await createEventQr();
   }
 
   async function loadPeople() {
@@ -1195,13 +1482,20 @@
       return;
     }
 
-    await sb.from('attendance_logs').insert({
+    const logAction = ({
+      present:'manual_check_in',
+      individual:'set_individual',
+      unknown:'manual_uncheck'
+    })[next] || 'correction';
+
+    const { error: logError } = await sb.from('attendance_logs').insert({
       event_id: state.event.id,
       participant_id: p.participantId,
-      action: next,
+      action: logAction,
       source: 'manual',
       actor_user_id: state.user.id
     });
+    if (logError) console.error('attendance log error:', logError);
 
     await loadPeople();
     renderAll();
@@ -1323,7 +1617,7 @@
     $('#ocrButton')?.addEventListener('click', () => toast('OCR 명단 등록은 다음 단계에서 연결합니다.'));
     $('#sheetButton')?.addEventListener('click', () => toast('Excel · Numbers · Sheets 연결은 다음 단계입니다.'));
     $('#proxyButton')?.addEventListener('click', () => toast('대리 QR은 행사 QR 기능과 함께 연결합니다.'));
-    $('#demoShare')?.addEventListener('click', () => toast('대리 QR 공유는 다음 단계에서 활성화합니다.'));
+    $('#demoShare')?.addEventListener('click', () => toast('대리 QR 공유는 다음 단계에서 연결합니다.'));
     $('#demoStart')?.addEventListener('click', startEventQr);
   }
 
@@ -1349,6 +1643,7 @@
 
   async function init() {
     ensureLoginUI();
+    ensureEventRegistrationUI();
     loadNotificationState();
     ensureNotificationCenter();
     renderNotificationCenter();
