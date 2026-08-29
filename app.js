@@ -669,27 +669,22 @@
       #attendanceNoticeCenter{
         position:fixed;
         left:50%;
-        top:50%;
+        top:52%;
         transform:translate(-50%,-50%);
-        width:min(calc(100% - 30px),540px);
+        width:min(calc(100% - 26px),540px);
         z-index:9000;
         pointer-events:none;
-        will-change:top,transform;
-        transition:
-          top .28s cubic-bezier(.22,.8,.22,1),
-          transform .28s cubic-bezier(.22,.8,.22,1),
-          width .28s ease;
       }
       #attendanceNoticeCenter.is-empty{display:none}
       #attendanceNoticeCenter.dragging{transition:none}
       #attendanceNoticeCenter.expanded{
-        inset:calc(env(safe-area-inset-top) + 8px) 11px calc(env(safe-area-inset-bottom) + 76px) 11px;
-        left:auto;
-        top:auto;
-        width:auto;
+        inset:0;
+        left:0;
+        top:0;
+        width:100%;
+        height:100dvh;
         transform:none;
         pointer-events:none;
-        transition:none;
       }
       #attendanceNoticeStack{
         position:relative;
@@ -702,58 +697,31 @@
       }
       #attendanceNoticeStack.expanded{
         position:absolute;
-        inset:0;
+        left:10px;
+        right:10px;
+        top:calc(env(safe-area-inset-top) + 16px);
+        bottom:calc(env(safe-area-inset-bottom) + 78px);
         display:flex;
         flex-direction:column;
         gap:10px;
         overflow-y:auto;
-        overscroll-behavior:contain;
-        padding:54px 2px 28px;
         -webkit-overflow-scrolling:touch;
+        overscroll-behavior:contain;
         scroll-behavior:smooth;
+        padding:48px 2px 26px;
         touch-action:pan-y;
-        mask-image:linear-gradient(to bottom,transparent 0,#000 32px,#000 calc(100% - 28px),transparent 100%);
-        -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 32px,#000 calc(100% - 28px),transparent 100%);
-      }
-      #attendanceNoticeDragHint{
-        display:none;
-      }
-      #attendanceNoticeCenter:not(.expanded) #attendanceNoticeDragHint{
-        display:block;
-        position:absolute;
-        left:50%;
-        top:-13px;
-        transform:translateX(-50%);
-        width:58px;
-        height:5px;
-        border-radius:999px;
-        background:rgba(82,82,88,.38);
-        pointer-events:none;
-        z-index:30;
-      }
-      #attendanceNoticeCenter.expanded #attendanceNoticeDragHint{
-        display:block;
-        position:absolute;
-        left:50%;
-        top:10px;
-        transform:translateX(-50%);
-        width:58px;
-        height:5px;
-        border-radius:999px;
-        background:rgba(82,82,88,.38);
-        pointer-events:none;
-        z-index:30;
+        pointer-events:auto;
       }
       .attendance-notice{
         position:relative;
         width:100%;
         min-height:72px;
         border-radius:22px;
-        background:rgba(198,199,204,.94);
-        border:1px solid rgba(255,255,255,.52);
-        box-shadow:0 11px 32px rgba(21,28,34,.22);
-        backdrop-filter:blur(26px) saturate(1.15);
-        -webkit-backdrop-filter:blur(26px) saturate(1.15);
+        background:rgba(174,174,178,.96);
+        border:1px solid rgba(255,255,255,.6);
+        box-shadow:0 10px 28px rgba(20,28,34,.24);
+        backdrop-filter:blur(24px) saturate(1.08);
+        -webkit-backdrop-filter:blur(24px) saturate(1.08);
         display:flex;
         align-items:center;
         padding:0 54px 0 18px;
@@ -764,27 +732,13 @@
         user-select:none;
         -webkit-user-select:none;
         touch-action:pan-y;
-        transform-origin:center top;
-        transition:
-          transform .34s cubic-bezier(.2,.8,.2,1),
-          opacity .28s ease,
-          filter .28s ease,
-          margin .34s cubic-bezier(.2,.8,.2,1);
         overflow:hidden;
+        transition:transform .24s ease,opacity .2s ease;
       }
       #attendanceNoticeStack.expanded .attendance-notice{
         flex:0 0 auto;
         opacity:1;
-        transform:translateY(0) scale(1);
-        animation:noticeOpen .36s cubic-bezier(.2,.8,.2,1) both;
-      }
-      #attendanceNoticeStack.expanded .attendance-notice:nth-child(2){animation-delay:.025s}
-      #attendanceNoticeStack.expanded .attendance-notice:nth-child(3){animation-delay:.05s}
-      #attendanceNoticeStack.expanded .attendance-notice:nth-child(4){animation-delay:.075s}
-      #attendanceNoticeStack.expanded .attendance-notice:nth-child(n+5){animation-delay:.1s}
-      @keyframes noticeOpen{
-        from{opacity:.2;transform:translateY(-22px) scale(.965)}
-        to{opacity:1;transform:translateY(0) scale(1)}
+        transform:none;
       }
       .attendance-notice-line{
         white-space:nowrap;
@@ -792,12 +746,9 @@
         text-overflow:ellipsis;
         width:100%;
       }
-      .attendance-notice .notice-status{
-        color:#0a887c;
-        font-weight:900;
-      }
-      .attendance-notice[data-status="individual"] .notice-status{color:#7045c8}
-      .attendance-notice[data-status="unknown"] .notice-status{color:#c53f46}
+      .attendance-notice .notice-status{color:#087f74;font-weight:900}
+      .attendance-notice[data-status="individual"] .notice-status{color:#663bb8}
+      .attendance-notice[data-status="unknown"] .notice-status{color:#bd343b}
 
       #attendanceNoticeStack.collapsed .attendance-notice{
         position:absolute;
@@ -808,26 +759,16 @@
         opacity:0;
       }
       #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(1){
-        z-index:6;
-        transform:translateY(0) scale(1);
-        opacity:1;
+        z-index:6;transform:translateY(0) scale(1);opacity:1;
       }
       #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(2){
-        z-index:5;
-        transform:translateY(-9px) scale(.965);
-        opacity:.9;
-        filter:brightness(.96);
+        z-index:5;transform:translateY(-9px) scale(.965);opacity:.92;
       }
       #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(3){
-        z-index:4;
-        transform:translateY(-17px) scale(.93);
-        opacity:.7;
-        filter:brightness(.92);
+        z-index:4;transform:translateY(-17px) scale(.93);opacity:.76;
       }
       #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(n+4){
-        opacity:0;
-        transform:translateY(-23px) scale(.91);
-        pointer-events:none;
+        opacity:0;transform:translateY(-23px) scale(.91);pointer-events:none;
       }
 
       #attendanceNoticeClear{
@@ -839,30 +780,27 @@
         height:38px;
         border:0;
         border-radius:50%;
-        background:rgba(82,82,88,.22);
-        color:#353b42;
+        background:rgba(72,72,74,.28);
+        color:#2f3439;
         font-size:24px;
         line-height:1;
         display:grid;
         place-items:center;
-        z-index:40;
+        z-index:50;
         pointer-events:auto;
-        backdrop-filter:blur(12px);
-        -webkit-backdrop-filter:blur(12px);
       }
       #attendanceNoticeCenter.expanded #attendanceNoticeClear{
-        top:8px;
-        right:8px;
+        position:fixed;
+        top:calc(env(safe-area-inset-top) + 18px);
+        right:18px;
         transform:none;
-        background:rgba(82,82,88,.3);
       }
-      .attendance-notice.swiping{
-        transition:none !important;
-      }
+      .attendance-notice.swiping{transition:none!important}
       @media (max-width:390px){
         .attendance-notice{font-size:14px;padding-left:15px;padding-right:50px}
-        #attendanceNoticeCenter.expanded{
-          inset:calc(env(safe-area-inset-top) + 6px) 8px calc(env(safe-area-inset-bottom) + 72px) 8px;
+        #attendanceNoticeStack.expanded{
+          left:8px;right:8px;
+          bottom:calc(env(safe-area-inset-bottom) + 72px);
         }
       }
     `;
@@ -872,7 +810,6 @@
     center.id = 'attendanceNoticeCenter';
     center.className = 'is-empty';
     center.innerHTML = `
-      <div id="attendanceNoticeDragHint" aria-hidden="true"></div>
       <div id="attendanceNoticeStack" class="collapsed" aria-label="출석 알림"></div>
       <button id="attendanceNoticeClear" type="button" aria-label="알림 전체 삭제">×</button>
     `;
@@ -888,20 +825,18 @@
     });
 
     $('#attendanceNoticeStack').addEventListener('click', e => {
-      if (notificationState.items.length <= 1) return;
       if (notificationState.dragging || notificationState.moved) return;
       if (e.target.closest('.attendance-notice')?.dataset.justSwiped === '1') return;
+      if (notificationState.expanded) return;
+      if (notificationState.items.length <= 1) return;
 
-      const wasExpanded = notificationState.expanded;
-      notificationState.expanded = !notificationState.expanded;
+      notificationState.expanded = true;
       renderNotificationCenter();
 
-      if (!wasExpanded && notificationState.expanded) {
-        requestAnimationFrame(() => {
-          const stack = $('#attendanceNoticeStack');
-          if (stack) stack.scrollTop = stack.scrollHeight;
-        });
-      }
+      requestAnimationFrame(() => {
+        const stack = $('#attendanceNoticeStack');
+        if (stack) stack.scrollTop = stack.scrollHeight;
+      });
     });
   }
 
@@ -934,72 +869,75 @@
   }
 
   function installNotificationCenterDrag(center) {
-    let holdTimer = null;
+    let startX = 0;
     let startY = 0;
     let startCenterY = 0;
-    let lastY = 0;
-    let armed = false;
-    let pointerId = null;
+    let dragging = false;
+    let moved = false;
+    let direction = null;
 
-    const cancelHold = () => {
-      clearTimeout(holdTimer);
-      holdTimer = null;
-    };
-
-    center.addEventListener('pointerdown', e => {
+    center.addEventListener('touchstart', e => {
       if (notificationState.expanded) return;
       if (e.target.closest('#attendanceNoticeClear')) return;
 
-      pointerId = e.pointerId;
-      startY = e.clientY;
-      lastY = e.clientY;
+      const t = e.touches?.[0];
+      if (!t) return;
+
+      startX = t.clientX;
+      startY = t.clientY;
       const rect = center.getBoundingClientRect();
       startCenterY = rect.top + rect.height / 2;
+      dragging = false;
+      moved = false;
+      direction = null;
+      notificationState.dragging = false;
       notificationState.moved = false;
-      armed = false;
+    }, {passive:true});
 
-      holdTimer = setTimeout(() => {
-        armed = true;
-        notificationState.dragging = true;
-        center.classList.add('dragging');
-        try { center.setPointerCapture(pointerId); } catch {}
-        if (navigator.vibrate) navigator.vibrate(10);
-      }, 260);
-    });
+    center.addEventListener('touchmove', e => {
+      if (notificationState.expanded) return;
+      const t = e.touches?.[0];
+      if (!t) return;
 
-    center.addEventListener('pointermove', e => {
-      if (pointerId !== e.pointerId) return;
-      lastY = e.clientY;
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
 
-      if (!armed) {
-        if (Math.abs(e.clientY - startY) > 9) cancelHold();
-        return;
+      if (!direction && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
+        direction = Math.abs(dy) >= Math.abs(dx) ? 'vertical' : 'horizontal';
       }
+
+      if (direction == 'horizontal') return;
+      if (direction != 'vertical') return;
 
       e.preventDefault();
+      dragging = true;
+      moved = true;
+      notificationState.dragging = true;
       notificationState.moved = true;
-      const nextY = startCenterY + (e.clientY - startY);
-      notificationState.y = clampNotificationY(nextY, center);
+      center.classList.add('dragging');
+
+      notificationState.y = clampNotificationY(startCenterY + dy, center);
       center.style.top = `${notificationState.y}px`;
-    });
+    }, {passive:false});
 
-    const finish = e => {
-      if (pointerId !== null && e.pointerId !== pointerId) return;
-      cancelHold();
-
-      if (armed) {
+    const finish = () => {
+      if (dragging) {
         center.classList.remove('dragging');
-        notificationState.dragging = false;
         saveNotificationPosition();
-        setTimeout(() => { notificationState.moved = false; }, 120);
       }
+      notificationState.dragging = false;
+      dragging = false;
+      direction = null;
 
-      armed = false;
-      pointerId = null;
+      if (moved) {
+        setTimeout(() => {
+          notificationState.moved = false;
+        }, 160);
+      }
     };
 
-    center.addEventListener('pointerup', finish);
-    center.addEventListener('pointercancel', finish);
+    center.addEventListener('touchend', finish, {passive:true});
+    center.addEventListener('touchcancel', finish, {passive:true});
   }
 
   function noticeStatusText(status) {
@@ -1023,7 +961,7 @@
     stack.className = notificationState.expanded ? 'expanded' : 'collapsed';
 
     if (notificationState.expanded) {
-      center.style.top = '';
+      center.style.top = '0';
     } else {
       requestAnimationFrame(applyNotificationPosition);
     }
