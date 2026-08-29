@@ -630,35 +630,88 @@
     if ($('#attendancePopup')) return;
     const popup = document.createElement('div');
     popup.id = 'attendancePopup';
-    popup.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(18,28,32,.34);display:none;place-items:center;padding:24px;';
+    popup.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(18,28,32,.46);display:none;place-items:center;padding:24px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);';
     popup.innerHTML = `
-      <div style="width:min(100%,390px);background:#fff;border-radius:28px;padding:28px 22px;box-shadow:0 24px 80px rgba(20,35,40,.22);text-align:center;">
-        <div style="width:72px;height:72px;border-radius:22px;background:#27c7b7;color:#fff;display:grid;place-items:center;font-size:36px;font-weight:900;margin:0 auto 16px;">✓</div>
-        <div style="font-size:13px;font-weight:900;color:#22a99d;margin-bottom:7px;">QR 출석 완료</div>
-        <strong id="attendancePopupName" style="display:block;font-size:27px;margin-bottom:8px;"></strong>
-        <div id="attendancePopupMeta" style="color:#718087;font-size:14px;line-height:1.6;"></div>
-        <button id="attendancePopupClose" type="button" style="width:100%;height:52px;border:0;border-radius:16px;background:#21b9aa;color:#fff;font-weight:900;font-size:16px;margin-top:22px;">확인</button>
+      <div id="attendancePopupCard" style="width:min(calc(100% - 8px),430px);background:rgba(255,255,255,.98);border-radius:32px;padding:34px 24px 24px;box-shadow:0 28px 90px rgba(20,35,40,.28);text-align:center;border:1px solid rgba(255,255,255,.8);">
+        <div id="attendancePopupIcon" style="width:86px;height:86px;border-radius:26px;background:#27c7b7;color:#fff;display:grid;place-items:center;font-size:43px;font-weight:900;margin:0 auto 18px;">✓</div>
+        <div id="attendancePopupKicker" style="font-size:14px;font-weight:900;color:#22a99d;margin-bottom:8px;">출석 완료</div>
+        <strong id="attendancePopupName" style="display:block;font-size:32px;line-height:1.18;margin-bottom:12px;letter-spacing:-.7px;"></strong>
+        <div id="attendancePopupMeta" style="color:#718087;font-size:16px;line-height:1.7;"></div>
+        <div id="attendancePopupTime" style="font-size:28px;font-weight:900;color:#152126;margin-top:14px;"></div>
+        <button id="attendancePopupClose" type="button" style="width:100%;height:58px;border:0;border-radius:18px;background:#21b9aa;color:#fff;font-weight:900;font-size:17px;margin-top:26px;">확인</button>
       </div>`;
     document.body.appendChild(popup);
     $('#attendancePopupClose').addEventListener('click', () => popup.style.display = 'none');
     popup.addEventListener('click', e => { if (e.target === popup) popup.style.display = 'none'; });
   }
 
-  function showAttendancePopup(person, checkedAt) {
+  function showLargeStatusPopup(person, status, checkedAt=null, source='manual') {
     const toggle = $('#popupToggle');
     if (toggle && !toggle.checked) return;
+
     ensureAttendancePopup();
+
     const popup = $('#attendancePopup');
+    const icon = $('#attendancePopupIcon');
+    const kicker = $('#attendancePopupKicker');
     const name = $('#attendancePopupName');
     const meta = $('#attendancePopupMeta');
-    if (!popup || !name || !meta) return;
+    const time = $('#attendancePopupTime');
+    const close = $('#attendancePopupClose');
+
+    if (!popup || !icon || !kicker || !name || !meta || !time || !close) return;
+
+    const config = {
+      present: {
+        icon:'✓',
+        title: source === 'qr' ? 'QR 출석 완료' : '출석 완료',
+        bg:'#27c7b7',
+        fg:'#22a99d',
+        button:'#21b9aa'
+      },
+      individual: {
+        icon:'↗',
+        title:'개인출발',
+        bg:'#8e5cf6',
+        fg:'#8150dc',
+        button:'#8150dc'
+      },
+      unknown: {
+        icon:'?',
+        title:'미확인',
+        bg:'#ff5a5f',
+        fg:'#e44c51',
+        button:'#e44c51'
+      }
+    }[status] || {
+      icon:'✓',
+      title:'상태 변경',
+      bg:'#27c7b7',
+      fg:'#22a99d',
+      button:'#21b9aa'
+    };
+
+    icon.textContent = config.icon;
+    icon.style.background = config.bg;
+    kicker.textContent = config.title;
+    kicker.style.color = config.fg;
+    close.style.background = config.button;
+
     name.textContent = person?.name || '참가자';
-    const parts = [person?.org || '소속 없음'];
+
+    const parts = [];
+    parts.push(person?.org || '소속 없음');
     if (person?.phone) parts.push(`•••• ${person.phone}`);
-    const t = formatCheckTime(checkedAt);
-    if (t) parts.push(`출석 ${t}`);
     meta.textContent = parts.join(' · ');
+
+    const t = status === 'present' ? formatCheckTime(checkedAt) : '';
+    time.textContent = t || '';
+
     popup.style.display = 'grid';
+  }
+
+  function showAttendancePopup(person, checkedAt) {
+    showLargeStatusPopup(person, 'present', checkedAt, 'qr');
   }
 
   function renderPeople() {
@@ -780,7 +833,8 @@
 
     await loadPeople();
     renderAll();
-    toast(`${p.name} · ${labelFor(next)}`);
+    const updatedPerson = state.people.find(x => x.linkId === linkId) || p;
+    showLargeStatusPopup(updatedPerson, next, updatedPerson.checkedAt, 'manual');
   }
 
   async function addPerson(e) {
