@@ -682,11 +682,16 @@
         <div class="avatar">${escapeHtml(p.name.slice(0,1))}</div>
         <div class="person-main">
           <strong>${escapeHtml(p.name)}</strong>
-          <small>${escapeHtml(p.org || '소속 없음')}${p.phone ? ` · •••• ${escapeHtml(p.phone)}` : ''}${p.status === 'present' && p.checkedAt ? ` · ${escapeHtml(formatCheckTime(p.checkedAt))}` : ''}</small>
+          <small>${escapeHtml(p.org || '소속 없음')}${p.phone ? ` · •••• ${escapeHtml(p.phone)}` : ''}</small>
         </div>
-        <button class="status-button ${p.status}" data-person="${p.linkId}">
-          ${labelFor(p.status)}
-        </button>
+        <div style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">
+          <button class="status-button ${p.status}" data-person="${p.linkId}"${p.status === 'present' ? ' style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;"' : ''}>
+            ${labelFor(p.status)}
+          </button>
+          ${p.status === 'present' && p.checkedAt
+            ? `<span class="status-button present" style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;">${escapeHtml(formatCheckTime(p.checkedAt))}</span>`
+            : ''}
+        </div>
       </div>
     `).join('');
 
@@ -708,9 +713,14 @@
       <div class="status-row">
         <div>
           <strong>${escapeHtml(p.name)}</strong>
-          <small>${escapeHtml(p.org || '소속 없음')}${p.status === 'present' && p.checkedAt ? ` · 출석 ${escapeHtml(formatCheckTime(p.checkedAt))}` : ''}</small>
+          <small>${escapeHtml(p.org || '소속 없음')}</small>
         </div>
-        <span class="badge ${p.status}">${labelFor(p.status)}</span>
+        <div style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">
+          <span class="badge ${p.status}"${p.status === 'present' ? ' style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;"' : ''}>${labelFor(p.status)}</span>
+          ${p.status === 'present' && p.checkedAt
+            ? `<span class="badge present" style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;">${escapeHtml(formatCheckTime(p.checkedAt))}</span>`
+            : ''}
+        </div>
       </div>
     `).join('');
   }
