@@ -38,6 +38,8 @@
     search: '',
     channel: null,
     qrToken: null,
+    arrivalQrToken: null,
+    qrView: 'gathering',
     previousEvent: null,
     awaitingNewEvent: false
   };
@@ -437,6 +439,7 @@
 
   async function loadGatheringQr() {
     state.qrToken = null;
+    state.arrivalQrToken = null;
     if (!state.event) return;
 
     const now = new Date().toISOString();
@@ -444,24 +447,85 @@
       .from('qr_tokens')
       .select('id,event_id,kind,token,is_active,valid_from,valid_until,created_at')
       .eq('event_id', state.event.id)
-      .eq('kind', 'gathering')
+      .in('kind', ['gathering','arrival'])
       .eq('is_active', true)
       .gte('valid_until', now)
-      .order('created_at', { ascending:false })
-      .limit(1);
+      .order('created_at', { ascending:false });
 
     if (error) {
       console.error('QR load error:', error);
       return;
     }
 
-    state.qrToken = data?.[0] || null;
+    const rows = data || [];
+    state.qrToken = rows.find(x => x.kind === 'gathering') || null;
+    state.arrivalQrToken = rows.find(x => x.kind === 'arrival') || null;
   }
 
-  function checkinUrl(token) {
+  function checkinUrl(token, kind='gathering') {
     const url = new URL('checkin.html', location.href);
     url.searchParams.set('t', token);
+    if (kind === 'arrival') url.searchParams.set('mode', 'arrival');
     return url.toString();
+  }
+
+  function ensureQrKindSelector() {
+    const qrPanel = $('.qr-panel');
+    const qrBox = $('.fake-qr');
+    if (!qrPanel || !qrBox || $('#qrKindSelector')) return;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #qrKindSelector{
+        display:grid;grid-template-columns:1fr 1fr;gap:5px;
+        width:calc(100% - 24px);max-width:430px;
+        margin:0 auto 24px;padding:5px;border-radius:17px;background:#eef3f3
+      }
+      #qrKindSelector[hidden]{display:none}
+      .qr-kind-button{
+        min-height:46px;border:0;border-radius:13px;background:transparent;
+        color:#7b878c;font-size:15px;font-weight:900;letter-spacing:-.2px
+      }
+      .qr-kind-button.active{
+        background:#fff;color:#10a997;
+        box-shadow:0 3px 12px rgba(27,67,68,.10)
+      }
+      .qr-kind-button:disabled{opacity:.42}
+    `;
+    document.head.appendChild(style);
+
+    const selector = document.createElement('div');
+    selector.id = 'qrKindSelector';
+    selector.hidden = true;
+    selector.innerHTML = `
+      <button type="button" class="qr-kind-button active" data-qr-kind="gathering">집결지 QR</button>
+      <button type="button" class="qr-kind-button" data-qr-kind="arrival">현장 QR</button>
+    `;
+    qrPanel.insertBefore(selector, qrBox);
+
+    $$('[data-qr-kind]', selector).forEach(button => {
+      button.addEventListener('click', () => {
+        state.qrView = button.dataset.qrKind === 'arrival' ? 'arrival' : 'gathering';
+        renderQr();
+      });
+    });
+  }
+
+  function syncQrKindSelector(cycle) {
+    ensureQrKindSelector();
+    const selector = $('#qrKindSelector');
+    if (!selector) return;
+
+    selector.hidden = cycle !== 'active';
+
+    $$('[data-qr-kind]', selector).forEach(button => {
+      const kind = button.dataset.qrKind;
+      button.classList.toggle('active', kind === state.qrView);
+      button.disabled =
+        kind === 'gathering'
+          ? !state.qrToken?.token
+          : !state.arrivalQrToken?.token;
+    });
   }
 
   function renderQrPlaceholder() {
@@ -496,6 +560,8 @@
     const shareBtn = $('#demoShare');
     const cycle = currentQrCycle();
 
+    syncQrKindSelector(cycle);
+
     if (cycle === 'new_event') {
       renderQrPlaceholder();
       if (pill) pill.textContent = '다음 행사 준비';
@@ -521,24 +587,28 @@
     if (cycle === 'ready') {
       renderQrPlaceholder();
       if (pill) pill.textContent = '준비 전';
-      if (title) title.textContent = '집결지 출석 QR';
-      if (desc) desc.textContent = '원하는 시간에 QR 생성을 누르면 이 행사 전용 QR이 만들어집니다.';
+      if (title) title.textContent = '집결지 · 현장 QR';
+      if (desc) desc.textContent = '원하는 시간에 QR 생성을 누르면 집결지 QR과 현장 QR이 함께 생성됩니다.';
       if (startBtn) startBtn.textContent = 'QR 생성';
       if (shareBtn) shareBtn.disabled = true;
       return;
     }
 
-    if (!state.qrToken?.token) {
+    const selectedKind = state.qrView === 'arrival' ? 'arrival' : 'gathering';
+    const selectedToken = selectedKind === 'arrival' ? state.arrivalQrToken : state.qrToken;
+    const selectedLabel = selectedKind === 'arrival' ? '현장 도착 QR' : '집결지 출석 QR';
+
+    if (!selectedToken?.token) {
       renderQrPlaceholder();
       if (pill) pill.textContent = '진행 중';
-      if (title) title.textContent = '집결지 출석 QR';
+      if (title) title.textContent = selectedLabel;
       if (desc) desc.textContent = '행사는 진행 중입니다. QR 정보를 다시 불러오고 있습니다.';
       if (startBtn) startBtn.textContent = '행사 종료';
       if (shareBtn) shareBtn.disabled = false;
       return;
     }
 
-    const target = checkinUrl(state.qrToken.token);
+    const target = checkinUrl(selectedToken.token, selectedKind);
     const qrImage =
       'https://quickchart.io/qr?size=320&margin=2&text=' +
       encodeURIComponent(target);
@@ -548,21 +618,24 @@
       'width:260px;height:260px;margin:0 auto 22px;background:#fff;border-radius:22px;padding:12px;box-sizing:border-box;display:grid;place-items:center;';
     const img = document.createElement('img');
     img.src = qrImage;
-    img.alt = '집결지 출석 QR';
+    img.alt = selectedLabel;
     img.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block;';
     qrBox.appendChild(img);
 
     if (pill) pill.textContent = '진행 중';
-    if (title) title.textContent = '집결지 출석 QR';
+    if (title) title.textContent = selectedLabel;
     if (desc) {
-      const until = state.qrToken.valid_until
-        ? new Date(state.qrToken.valid_until).toLocaleString('ko-KR', {
+      const until = selectedToken.valid_until
+        ? new Date(selectedToken.valid_until).toLocaleString('ko-KR', {
             month:'numeric', day:'numeric', hour:'numeric', minute:'2-digit'
           })
         : '';
+      const roleText = selectedKind === 'arrival'
+        ? '현장 도착 확인용 QR입니다.'
+        : '집결지 출석 확인용 QR입니다.';
       desc.textContent = until
-        ? `현재 행사 전용 QR입니다. ${until}까지 유효하며 행사 종료 시 즉시 폐기됩니다.`
-        : '현재 행사 전용 QR입니다. 행사 종료 시 즉시 폐기됩니다.';
+        ? `${roleText} ${until}까지 유효하며 행사 종료 시 즉시 폐기됩니다.`
+        : `${roleText} 행사 종료 시 즉시 폐기됩니다.`;
     }
     if (startBtn) startBtn.textContent = '행사 종료';
     if (shareBtn) shareBtn.disabled = false;
@@ -695,6 +768,8 @@
       state.previousEvent = created;
       state.awaitingNewEvent = false;
       state.qrToken = null;
+      state.arrivalQrToken = null;
+      state.qrView = 'gathering';
       try { localStorage.removeItem(QR_NEXT_EVENT_KEY); } catch {}
 
       await loadPeople();
@@ -733,7 +808,10 @@
     }
 
     const gathering = (data || []).find(x => x.kind === 'gathering') || null;
+    const arrival = (data || []).find(x => x.kind === 'arrival') || null;
     state.qrToken = gathering;
+    state.arrivalQrToken = arrival;
+    state.qrView = 'gathering';
 
     const { error: eventError } = await sb
       .from('events')
@@ -781,6 +859,8 @@
 
     state.event.status = 'ended';
     state.qrToken = null;
+    state.arrivalQrToken = null;
+    state.qrView = 'gathering';
     state.awaitingNewEvent = false;
     renderAll();
     toast('행사 종료 · 현재 QR 폐기 완료');
