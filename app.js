@@ -5,6 +5,7 @@
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
   const toastEl = $('#toast');
   let toastTimer;
+  let googleSheetsSyncTimer = null;
 
   const toast = (msg) => {
     if (!toastEl) return;
@@ -301,6 +302,7 @@
       await loadGatheringQr();
       subscribeRealtime();
       renderAll();
+      queueGoogleSheetsCurrentSync(500);
     } catch (e) {
       console.error(e);
       toast('관리자 데이터 연결을 확인해주세요.');
@@ -875,6 +877,7 @@
       await loadAttendanceLogs();
       subscribeRealtime();
       renderAll();
+      queueGoogleSheetsCurrentSync(300);
       $('#eventRegistrationDialog')?.close();
       toast(rosterMode === 'copy' ? '새 행사 등록 · 이전 명단 불러오기 완료' : '새 행사 등록 완료');
     } catch (err) {
@@ -962,7 +965,14 @@
     state.qrView = 'gathering';
     state.awaitingNewEvent = false;
     renderAll();
-    toast('행사 종료 · 현재 QR 폐기 완료');
+
+    const archivedToSheets = await archiveGoogleSheetsEvent(false);
+    if (archivedToSheets) {
+      await syncGoogleSheetsCurrent(false);
+      toast('행사 종료 · QR 폐기 · Google Sheets 보관 완료');
+    } else {
+      toast('행사 종료 완료 · Google Sheets 보관 상태는 확인해주세요.');
+    }
   }
 
   function prepareNextEvent() {
@@ -1699,6 +1709,7 @@
 
     await loadPeople();
     renderAll();
+    queueGoogleSheetsCurrentSync();
     $('#participantEditDialog')?.close();
     toast(`${name} 수정 완료`);
   }
@@ -1732,6 +1743,7 @@
 
     await loadPeople();
     renderAll();
+    queueGoogleSheetsCurrentSync();
     $('#participantEditDialog')?.close();
     toast(`${name} 명단에서 삭제 완료`);
   }
@@ -2065,6 +2077,7 @@
     await loadPeople();
     await loadAttendanceLogs();
     renderAll();
+    queueGoogleSheetsCurrentSync();
     const updatedPerson = state.people.find(x => x.linkId === linkId) || p;
     pushAttendanceNotification(updatedPerson, next);
   }
@@ -2118,6 +2131,7 @@
 
     await loadPeople();
     renderAll();
+    queueGoogleSheetsCurrentSync();
     toast(`${name} 등록 완료`);
   }
 
@@ -2150,6 +2164,7 @@
           const arrivedAt = payload?.new?.arrived_at || null;
           await loadPeople();
           renderAll();
+          queueGoogleSheetsCurrentSync();
           const person = state.people.find(p => p.participantId === participantId);
           if (isQrCheckIn) {
             showAttendancePopup(person, checkedAt);
@@ -2234,6 +2249,163 @@
     window.scrollTo({top:0, behavior:'smooth'});
   }
 
+  async function invokeGoogleSheets(action, payload={}) {
+    if (!sb || !state.user) throw new Error('로그인이 필요합니다.');
+
+    const { data, error } = await sb.functions.invoke('google-sheets-bridge', {
+      body: { action, ...payload }
+    });
+
+    if (error) throw error;
+    if (!data?.ok) throw new Error(data?.error || 'Google Sheets 연결 실패');
+    return data;
+  }
+
+  function googleSheetsEventPayload() {
+    return state.event ? {
+      id: state.event.id || '',
+      title: state.event.title || '',
+      event_date: state.event.event_date || '',
+      location: state.event.location || ''
+    } : {};
+  }
+
+  function googleSheetsPeoplePayload() {
+    return state.people.map(p => ({
+      name: p.name || '',
+      org: p.org || '',
+      phone: p.phone || '',
+      status: spreadsheetStatusLabel(p),
+      checkedAt: p.checkedAt || '',
+      arrivedAt: p.arrivedAt || ''
+    }));
+  }
+
+  async function syncGoogleSheetsCurrent(showToast=true) {
+    if (!state.event) {
+      if (showToast) toast('현재 행사가 없습니다.');
+      return false;
+    }
+
+    try {
+      await invokeGoogleSheets('syncCurrent', {
+        event: googleSheetsEventPayload(),
+        people: googleSheetsPeoplePayload()
+      });
+      if (showToast) toast('Google Sheets 현재행사 동기화 완료');
+      return true;
+    } catch (error) {
+      console.error('google sheets current sync error:', error);
+      if (showToast) toast(`Google Sheets 동기화 실패 · ${error.message || '확인 필요'}`);
+      return false;
+    }
+  }
+
+  function queueGoogleSheetsCurrentSync(delay=900) {
+    if (!state.event) return;
+    clearTimeout(googleSheetsSyncTimer);
+    googleSheetsSyncTimer = setTimeout(() => {
+      syncGoogleSheetsCurrent(false).catch(console.error);
+    }, delay);
+  }
+
+  async function archiveGoogleSheetsEvent(showToast=false) {
+    if (!state.event) return false;
+
+    try {
+      await invokeGoogleSheets('archiveEvent', {
+        event: googleSheetsEventPayload(),
+        people: googleSheetsPeoplePayload()
+      });
+      if (showToast) toast('Google Sheets 행사기록 보관 완료');
+      return true;
+    } catch (error) {
+      console.error('google sheets archive error:', error);
+      if (showToast) toast(`Google Sheets 행사기록 보관 실패 · ${error.message || '확인 필요'}`);
+      return false;
+    }
+  }
+
+  function buildGoogleRosterPreview(rows) {
+    const currentKeys = new Set(
+      state.people.map(p => importPersonKey(p.name, p.phone))
+    );
+    const fileKeys = new Set();
+    const parsed = [];
+
+    (rows || []).forEach((row, index) => {
+      const name = String(row?.name ?? '').trim();
+      const org = String(row?.affiliation ?? '').trim();
+      const phone = normalizeImportPhone(row?.phone_last4 ?? '');
+
+      if (!name && !org && !phone) return;
+
+      let stateLabel = 'ok';
+      let reason = '등록 가능';
+
+      if (!name) {
+        stateLabel = 'bad';
+        reason = '이름 없음';
+      } else if (!/^\d{4}$/.test(phone)) {
+        stateLabel = 'bad';
+        reason = '전화 4자리 오류';
+      } else {
+        const key = importPersonKey(name, phone);
+        if (currentKeys.has(key)) {
+          stateLabel = 'skip';
+          reason = '현재 명단 중복';
+        } else if (fileKeys.has(key)) {
+          stateLabel = 'skip';
+          reason = '시트 내 중복';
+        } else {
+          fileKeys.add(key);
+        }
+      }
+
+      parsed.push({
+        rowNumber: index + 2,
+        name,
+        org,
+        phone,
+        state: stateLabel,
+        reason
+      });
+    });
+
+    return parsed;
+  }
+
+  async function previewGoogleSheetsRoster() {
+    if (!state.event) {
+      toast('먼저 행사를 등록해주세요.');
+      return;
+    }
+
+    const button = $('#googleSheetsImportButton');
+    if (button) button.disabled = true;
+
+    try {
+      const data = await invokeGoogleSheets('roster');
+      state.spreadsheetRows = buildGoogleRosterPreview(data.rows || []);
+      state.spreadsheetFileName = 'Google Sheets · 명단입력';
+      renderSpreadsheetPreview();
+
+      if (!state.spreadsheetRows.length) {
+        $('#sheetPreview').innerHTML =
+          '<div class="sheet-preview-message" style="background:#f5fbfa;color:#567078;border-color:#d8efeb;">Google Sheets의 명단입력 탭에 등록된 사람이 없습니다.</div>';
+        $('#spreadsheetImportConfirm').hidden = true;
+      }
+    } catch (error) {
+      console.error('google sheets roster error:', error);
+      state.spreadsheetRows = [];
+      $('#sheetPreview').innerHTML =
+        `<div class="sheet-preview-message">Google Sheets 명단을 불러오지 못했습니다.<br>${escapeHtml(error.message || '연결 상태를 확인해주세요.')}</div>`;
+      $('#spreadsheetImportConfirm').hidden = true;
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   function ensureSpreadsheetUI() {
     if ($('#spreadsheetDialog')) return;
 
@@ -2278,6 +2450,26 @@
         color:#596267;
         flex:0 0 auto;
       }
+      .sheet-direct-box{
+        margin:0 0 14px;
+        padding:13px;
+        border:1px solid #cfeee9;
+        border-radius:18px;
+        background:#f4fffd;
+      }
+      .sheet-direct-head{
+        display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;
+      }
+      .sheet-direct-head strong{font-size:14px;color:#176e68}
+      .sheet-connected{
+        color:#159f93;background:#e6f8f5;border-radius:999px;padding:5px 8px;font-size:10px;font-weight:900;
+      }
+      .sheet-direct-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+      .sheet-direct-actions button{
+        min-height:48px;border:0;border-radius:14px;background:#fff;color:#159f93;
+        font-size:12px;font-weight:900;padding:9px;border:1px solid #d8efeb;
+      }
+      .sheet-direct-note{margin-top:9px;color:#64777c;font-size:10px;line-height:1.45}
       .sheet-action-grid{display:grid;gap:10px}
       .sheet-action{
         width:100%;
@@ -2367,6 +2559,21 @@
           <button type="button" class="sheet-dialog-close" id="spreadsheetClose" aria-label="닫기">×</button>
         </div>
 
+        <div class="sheet-direct-box">
+          <div class="sheet-direct-head">
+            <strong>Google Sheets 직접 연동</strong>
+            <span class="sheet-connected">연결됨</span>
+          </div>
+          <div class="sheet-direct-actions">
+            <button type="button" id="googleSheetsImportButton">명단입력 가져오기</button>
+            <button type="button" id="googleSheetsSyncButton">현재행사 지금 동기화</button>
+          </div>
+          <div class="sheet-direct-note">
+            출석·개인출발·현장도착·명단 변경은 Google Sheets의 <strong>현재행사</strong> 탭에 자동 반영되고,
+            행사 종료 시 <strong>행사기록</strong> 탭에 보관됩니다.
+          </div>
+        </div>
+
         <div class="sheet-action-grid">
           <button type="button" class="sheet-action" id="spreadsheetImportButton">
             <div>
@@ -2421,6 +2628,8 @@
         input.click();
       }
     });
+    $('#googleSheetsImportButton')?.addEventListener('click', previewGoogleSheetsRoster);
+    $('#googleSheetsSyncButton')?.addEventListener('click', () => syncGoogleSheetsCurrent(true));
     $('#spreadsheetFileInput')?.addEventListener('change', handleSpreadsheetFile);
     $('#spreadsheetImportConfirm')?.addEventListener('click', importSpreadsheetRows);
     $('#spreadsheetExportButton')?.addEventListener('click', exportCurrentEventSpreadsheet);
@@ -2689,6 +2898,7 @@
 
       await loadPeople();
       renderAll();
+      queueGoogleSheetsCurrentSync();
       resetSpreadsheetPreview();
       $('#spreadsheetDialog')?.close();
       toast(`명단 ${links.length}명 불러오기 완료`);
