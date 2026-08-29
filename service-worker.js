@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v31-past-events-delete-20260829';
+const CACHE='qr-attendance-v32-spreadsheet-import-export-20260829';
 const ASSETS=[
 './','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'

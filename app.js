@@ -40,6 +40,8 @@
     historyHasMore: false,
     historySelectedEvent: null,
     historyDeleteContext: null,
+    spreadsheetRows: [],
+    spreadsheetFileName: '',
     filter: 'all',
     search: '',
     channel: null,
@@ -2207,7 +2209,7 @@
     $('#saveSettings')?.addEventListener('click', () => toast('설정 저장 완료'));
     $('#notificationButton')?.addEventListener('click', () => toast('실시간 출석 알림 연결 준비 완료'));
     $('#ocrButton')?.addEventListener('click', () => toast('OCR 명단 등록은 다음 단계에서 연결합니다.'));
-    $('#sheetButton')?.addEventListener('click', () => toast('Excel · Numbers · Sheets 연결은 다음 단계입니다.'));
+    $('#sheetButton')?.addEventListener('click', openSpreadsheetDialog);
     $('#proxyButton')?.addEventListener('click', () => {
       go('qr');
       toast('집결지 QR 또는 현장 QR을 선택한 뒤 대리 QR 공유를 눌러주세요.');
@@ -2230,6 +2232,608 @@
       loadPastEvents(true).catch(console.error);
     }
     window.scrollTo({top:0, behavior:'smooth'});
+  }
+
+  function ensureSpreadsheetUI() {
+    if ($('#spreadsheetDialog')) return;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #spreadsheetDialog{
+        width:min(calc(100% - 28px),460px);
+        border:0;
+        border-radius:26px;
+        padding:0;
+        background:#fff;
+        box-shadow:0 22px 70px rgba(20,39,45,.24);
+      }
+      #spreadsheetDialog::backdrop{
+        background:rgba(18,26,30,.36);
+        backdrop-filter:blur(3px);
+        -webkit-backdrop-filter:blur(3px);
+      }
+      .sheet-dialog-body{
+        box-sizing:border-box;
+        padding:22px 18px 20px;
+        max-height:84dvh;
+        overflow-y:auto;
+        -webkit-overflow-scrolling:touch;
+      }
+      .sheet-dialog-head{
+        display:flex;
+        align-items:flex-start;
+        justify-content:space-between;
+        gap:12px;
+        margin-bottom:16px;
+      }
+      .sheet-dialog-head h2{font-size:22px;margin:0 0 4px}
+      .sheet-dialog-head p{margin:0;color:#7f8a90;font-size:12px;line-height:1.45}
+      .sheet-dialog-close{
+        border:0;
+        background:#f1f3f4;
+        width:38px;
+        height:38px;
+        border-radius:50%;
+        font-size:23px;
+        color:#596267;
+        flex:0 0 auto;
+      }
+      .sheet-action-grid{display:grid;gap:10px}
+      .sheet-action{
+        width:100%;
+        min-height:68px;
+        border:1px solid #e3ebed;
+        border-radius:18px;
+        background:#fff;
+        padding:12px 14px;
+        text-align:left;
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:12px;
+      }
+      .sheet-action strong{display:block;font-size:15px;color:#243036}
+      .sheet-action small{display:block;font-size:11px;color:#839096;margin-top:3px;line-height:1.4}
+      .sheet-action .sheet-icon{
+        width:38px;height:38px;border-radius:12px;background:#eff9f7;color:#159f93;
+        display:grid;place-items:center;font-size:18px;font-weight:900;flex:0 0 auto;
+      }
+      .sheet-compat{
+        margin:12px 0 0;
+        padding:12px 13px;
+        background:#f6faf9;
+        border-radius:14px;
+        color:#65747b;
+        font-size:11px;
+        line-height:1.55;
+      }
+      #sheetPreview{margin-top:14px}
+      .sheet-preview-summary{
+        display:grid;
+        grid-template-columns:repeat(3,minmax(0,1fr));
+        gap:7px;
+        margin-bottom:10px;
+      }
+      .sheet-preview-summary div{
+        background:#f7fafb;border-radius:13px;padding:10px 5px;text-align:center;
+      }
+      .sheet-preview-summary span{display:block;color:#89949a;font-size:9px;font-weight:800}
+      .sheet-preview-summary b{display:block;font-size:18px;margin-top:3px}
+      .sheet-preview-table{
+        border:1px solid #e7edef;
+        border-radius:15px;
+        overflow:hidden;
+      }
+      .sheet-preview-row{
+        display:grid;
+        grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) 68px;
+        gap:8px;
+        padding:9px 10px;
+        border-top:1px solid #edf1f2;
+        align-items:center;
+        font-size:12px;
+      }
+      .sheet-preview-row:first-child{border-top:0}
+      .sheet-preview-row.header{
+        background:#f7fafb;color:#7d898f;font-size:10px;font-weight:850;
+      }
+      .sheet-preview-row strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .sheet-preview-row small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#7f8c92}
+      .sheet-row-state{font-size:10px;font-weight:900;text-align:right}
+      .sheet-row-state.ok{color:#159f93}
+      .sheet-row-state.skip{color:#a66f15}
+      .sheet-row-state.bad{color:#d94d55}
+      .sheet-import-confirm{
+        width:100%;height:50px;border:0;border-radius:15px;
+        background:#22c7b7;color:#fff;font-weight:900;font-size:15px;margin-top:12px;
+      }
+      .sheet-import-confirm[hidden]{display:none}
+      .sheet-preview-message{
+        padding:13px;border-radius:14px;background:#fff5f6;color:#bf4049;
+        border:1px solid #ffd7da;font-size:12px;line-height:1.5;
+      }
+    `;
+    document.head.appendChild(style);
+
+    const dialog = document.createElement('dialog');
+    dialog.id = 'spreadsheetDialog';
+    dialog.innerHTML = `
+      <div class="sheet-dialog-body">
+        <div class="sheet-dialog-head">
+          <div>
+            <h2>명단 불러오기 · 내보내기</h2>
+            <p>Excel · Apple Numbers · Google Sheets에서 같은 파일을 사용할 수 있습니다.</p>
+          </div>
+          <button type="button" class="sheet-dialog-close" id="spreadsheetClose" aria-label="닫기">×</button>
+        </div>
+
+        <div class="sheet-action-grid">
+          <button type="button" class="sheet-action" id="spreadsheetImportButton">
+            <div>
+              <strong>명단 파일 불러오기</strong>
+              <small>.xlsx · .xls · .csv / 이름 + 전화 뒤 4자리 필수</small>
+            </div>
+            <span class="sheet-icon">↑</span>
+          </button>
+
+          <button type="button" class="sheet-action" id="spreadsheetExportButton">
+            <div>
+              <strong>현재 행사 명단 내보내기</strong>
+              <small>출석상태 · 출석시간 · 현장도착시간까지 .xlsx로 저장</small>
+            </div>
+            <span class="sheet-icon">↓</span>
+          </button>
+
+          <button type="button" class="sheet-action" id="spreadsheetTemplateButton">
+            <div>
+              <strong>빈 명단 양식 받기</strong>
+              <small>이름 · 소속 · 전화번호 뒤 4자리 기본 양식</small>
+            </div>
+            <span class="sheet-icon">＋</span>
+          </button>
+        </div>
+
+        <input id="spreadsheetFileInput" type="file" accept=".xlsx,.xls,.csv,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+
+        <div class="sheet-compat">
+          Google Sheets는 시트를 <strong>Excel(.xlsx)</strong> 또는 <strong>CSV</strong>로 내려받아 불러올 수 있고,
+          내보낸 .xlsx 파일은 Excel · Numbers · Google Sheets에서 그대로 열 수 있습니다.
+        </div>
+
+        <div id="sheetPreview"></div>
+        <button type="button" id="spreadsheetImportConfirm" class="sheet-import-confirm" hidden>등록 가능한 명단 불러오기</button>
+      </div>
+    `;
+    document.body.appendChild(dialog);
+
+    $('#spreadsheetClose')?.addEventListener('click', () => {
+      resetSpreadsheetPreview();
+      dialog.close();
+    });
+    $('#spreadsheetImportButton')?.addEventListener('click', () => {
+      if (!state.event) {
+        toast('먼저 행사를 등록해주세요.');
+        return;
+      }
+      const input = $('#spreadsheetFileInput');
+      if (input) {
+        input.value = '';
+        input.click();
+      }
+    });
+    $('#spreadsheetFileInput')?.addEventListener('change', handleSpreadsheetFile);
+    $('#spreadsheetImportConfirm')?.addEventListener('click', importSpreadsheetRows);
+    $('#spreadsheetExportButton')?.addEventListener('click', exportCurrentEventSpreadsheet);
+    $('#spreadsheetTemplateButton')?.addEventListener('click', exportSpreadsheetTemplate);
+  }
+
+  function openSpreadsheetDialog() {
+    ensureSpreadsheetUI();
+    resetSpreadsheetPreview();
+    $('#spreadsheetDialog')?.showModal();
+  }
+
+  function resetSpreadsheetPreview() {
+    state.spreadsheetRows = [];
+    state.spreadsheetFileName = '';
+    const preview = $('#sheetPreview');
+    const confirm = $('#spreadsheetImportConfirm');
+    if (preview) preview.innerHTML = '';
+    if (confirm) {
+      confirm.hidden = true;
+      confirm.disabled = false;
+      confirm.textContent = '등록 가능한 명단 불러오기';
+    }
+  }
+
+  function normalizeSheetHeader(value) {
+    return String(value ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[\s._\-()/]/g, '');
+  }
+
+  function findSheetColumn(headers, aliases) {
+    const normalized = headers.map(normalizeSheetHeader);
+    for (const alias of aliases) {
+      const idx = normalized.indexOf(normalizeSheetHeader(alias));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  }
+
+  function normalizeImportPhone(value) {
+    const digits = String(value ?? '').replace(/\D/g, '');
+    if (!digits) return '';
+    if (digits.length >= 4) return digits.slice(-4);
+    return digits;
+  }
+
+  function importPersonKey(name, phone) {
+    return `${String(name || '').trim().toLowerCase()}|${String(phone || '').trim()}`;
+  }
+
+  async function handleSpreadsheetFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!window.XLSX) {
+      $('#sheetPreview').innerHTML = '<div class="sheet-preview-message">Excel 처리 모듈을 불러오지 못했습니다. 인터넷 연결 후 다시 시도해주세요.</div>';
+      return;
+    }
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type:'array', cellDates:false });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+      if (!firstSheet) throw new Error('첫 번째 시트를 찾지 못했습니다.');
+
+      const rows = XLSX.utils.sheet_to_json(firstSheet, {
+        header:1,
+        defval:'',
+        raw:false,
+        blankrows:false
+      });
+
+      if (!rows.length) throw new Error('파일에 데이터가 없습니다.');
+
+      const headers = rows[0].map(v => String(v ?? '').trim());
+      const nameCol = findSheetColumn(headers, ['이름','성명','name']);
+      const orgCol = findSheetColumn(headers, ['소속','기관','회사','단체','affiliation','organization','org']);
+      const phoneCol = findSheetColumn(headers, [
+        '전화번호 뒤 4자리','전화번호뒤4자리','전화 뒤 4자리','전화뒤4자리',
+        '뒤4자리','핸드폰뒤4자리','휴대폰뒤4자리','전화번호','연락처','phone','mobile','last4'
+      ]);
+
+      if (nameCol < 0 || phoneCol < 0) {
+        state.spreadsheetRows = [];
+        $('#sheetPreview').innerHTML = `
+          <div class="sheet-preview-message">
+            첫 줄에서 <strong>이름</strong>과 <strong>전화번호 뒤 4자리</strong> 열을 찾지 못했습니다.<br>
+            빈 명단 양식을 받아 같은 제목으로 작성해주세요.
+          </div>`;
+        $('#spreadsheetImportConfirm').hidden = true;
+        return;
+      }
+
+      const currentKeys = new Set(
+        state.people.map(p => importPersonKey(p.name, p.phone))
+      );
+      const fileKeys = new Set();
+      const parsed = [];
+
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i] || [];
+        const name = String(row[nameCol] ?? '').trim();
+        const org = orgCol >= 0 ? String(row[orgCol] ?? '').trim() : '';
+        const phone = normalizeImportPhone(row[phoneCol]);
+
+        if (!name && !org && !phone) continue;
+
+        let stateLabel = 'ok';
+        let reason = '등록 가능';
+
+        if (!name) {
+          stateLabel = 'bad';
+          reason = '이름 없음';
+        } else if (!/^\d{4}$/.test(phone)) {
+          stateLabel = 'bad';
+          reason = '전화 4자리 오류';
+        } else {
+          const key = importPersonKey(name, phone);
+          if (currentKeys.has(key)) {
+            stateLabel = 'skip';
+            reason = '현재 명단 중복';
+          } else if (fileKeys.has(key)) {
+            stateLabel = 'skip';
+            reason = '파일 내 중복';
+          } else {
+            fileKeys.add(key);
+          }
+        }
+
+        parsed.push({
+          rowNumber: i + 1,
+          name,
+          org,
+          phone,
+          state: stateLabel,
+          reason
+        });
+      }
+
+      state.spreadsheetRows = parsed;
+      state.spreadsheetFileName = file.name || '';
+      renderSpreadsheetPreview();
+    } catch (error) {
+      console.error('spreadsheet parse error:', error);
+      state.spreadsheetRows = [];
+      $('#sheetPreview').innerHTML = `<div class="sheet-preview-message">파일을 읽지 못했습니다. .xlsx, .xls, .csv 파일인지 확인해주세요.</div>`;
+      $('#spreadsheetImportConfirm').hidden = true;
+    }
+  }
+
+  function renderSpreadsheetPreview() {
+    const preview = $('#sheetPreview');
+    const confirm = $('#spreadsheetImportConfirm');
+    if (!preview || !confirm) return;
+
+    const rows = state.spreadsheetRows;
+    const ok = rows.filter(r => r.state === 'ok').length;
+    const skip = rows.filter(r => r.state === 'skip').length;
+    const bad = rows.filter(r => r.state === 'bad').length;
+    const sample = rows.slice(0, 8);
+
+    preview.innerHTML = `
+      <div style="font-size:13px;font-weight:900;margin-bottom:8px;">${escapeHtml(state.spreadsheetFileName || '선택 파일')}</div>
+      <div class="sheet-preview-summary">
+        <div><span>등록 가능</span><b>${ok}</b></div>
+        <div><span>중복 제외</span><b>${skip}</b></div>
+        <div><span>오류 제외</span><b>${bad}</b></div>
+      </div>
+      <div class="sheet-preview-table">
+        <div class="sheet-preview-row header"><strong>이름</strong><small>소속</small><span>상태</span></div>
+        ${sample.map(r => `
+          <div class="sheet-preview-row">
+            <strong>${escapeHtml(r.name || `(${r.rowNumber}행)`)}</strong>
+            <small>${escapeHtml(r.org || '소속 없음')}</small>
+            <span class="sheet-row-state ${r.state}">${escapeHtml(r.reason)}</span>
+          </div>
+        `).join('')}
+      </div>
+      ${rows.length > sample.length ? `<div style="margin-top:7px;color:#8a959b;font-size:10px;">외 ${rows.length - sample.length}행</div>` : ''}
+    `;
+
+    confirm.hidden = ok === 0;
+    confirm.textContent = `등록 가능한 ${ok}명 불러오기`;
+  }
+
+  async function findReusableParticipants(rows) {
+    const uniqueNames = [...new Set(rows.map(r => r.name).filter(Boolean))];
+    const result = [];
+    for (let i = 0; i < uniqueNames.length; i += 80) {
+      const batch = uniqueNames.slice(i, i + 80);
+      const { data, error } = await sb
+        .from('participants')
+        .select('id,name,affiliation,phone_last4')
+        .eq('organization_id', state.member.organization_id)
+        .in('name', batch)
+        .limit(1000);
+      if (error) throw error;
+      result.push(...(data || []));
+    }
+    return result;
+  }
+
+  async function importSpreadsheetRows() {
+    if (!state.event) {
+      toast('먼저 행사를 등록해주세요.');
+      return;
+    }
+
+    const rows = state.spreadsheetRows.filter(r => r.state === 'ok');
+    if (!rows.length) {
+      toast('등록 가능한 명단이 없습니다.');
+      return;
+    }
+
+    const button = $('#spreadsheetImportConfirm');
+    if (button) {
+      button.disabled = true;
+      button.textContent = '명단 등록 중…';
+    }
+
+    try {
+      const reusable = await findReusableParticipants(rows);
+      const participantIdByKey = new Map();
+
+      for (const p of reusable) {
+        participantIdByKey.set(importPersonKey(p.name, p.phone_last4), p.id);
+      }
+
+      const needCreate = rows.filter(r => !participantIdByKey.has(importPersonKey(r.name, r.phone)));
+
+      if (needCreate.length) {
+        for (let i = 0; i < needCreate.length; i += 100) {
+          const batch = needCreate.slice(i, i + 100);
+          const { data, error } = await sb
+            .from('participants')
+            .insert(batch.map(r => ({
+              organization_id: state.member.organization_id,
+              name: r.name,
+              affiliation: r.org || null,
+              phone_last4: r.phone
+            })))
+            .select('id,name,affiliation,phone_last4');
+
+          if (error) throw error;
+          for (const p of data || []) {
+            participantIdByKey.set(importPersonKey(p.name, p.phone_last4), p.id);
+          }
+        }
+      }
+
+      const links = rows
+        .map(r => ({
+          event_id: state.event.id,
+          participant_id: participantIdByKey.get(importPersonKey(r.name, r.phone))
+        }))
+        .filter(x => x.participant_id);
+
+      for (let i = 0; i < links.length; i += 100) {
+        const { error } = await sb
+          .from('event_participants')
+          .insert(links.slice(i, i + 100));
+        if (error) throw error;
+      }
+
+      await loadPeople();
+      renderAll();
+      resetSpreadsheetPreview();
+      $('#spreadsheetDialog')?.close();
+      toast(`명단 ${links.length}명 불러오기 완료`);
+    } catch (error) {
+      console.error('spreadsheet import error:', error);
+      toast(`명단 불러오기 실패 · ${error.message || '확인 필요'}`);
+      if (button) {
+        button.disabled = false;
+        button.textContent = `등록 가능한 ${rows.length}명 불러오기`;
+      }
+    }
+  }
+
+  function safeSpreadsheetFilename(text) {
+    return String(text || '행사')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\s+/g, '_')
+      .slice(0, 60);
+  }
+
+  function spreadsheetStatusLabel(person) {
+    if (person.status === 'individual') return '개인출발';
+    if (person.arrivedAt) return '현장도착';
+    if (person.status === 'present') return '출석';
+    return '미확인';
+  }
+
+  function spreadsheetIsoTime(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleString('ko-KR', {
+      year:'numeric', month:'2-digit', day:'2-digit',
+      hour:'2-digit', minute:'2-digit', hour12:false
+    });
+  }
+
+  async function shareOrDownloadXlsx(workbook, filename) {
+    const data = XLSX.write(workbook, { bookType:'xlsx', type:'array' });
+    const file = new File(
+      [data],
+      filename,
+      { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+    );
+
+    try {
+      if (navigator.canShare && navigator.canShare({ files:[file] }) && navigator.share) {
+        await navigator.share({
+          title: filename,
+          text: 'QR 자동 출석부 명단 파일',
+          files: [file]
+        });
+        return;
+      }
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+      console.warn('file share fallback:', error);
+    }
+
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  async function exportCurrentEventSpreadsheet() {
+    if (!state.event) {
+      toast('먼저 행사를 등록해주세요.');
+      return;
+    }
+    if (!window.XLSX) {
+      toast('Excel 처리 모듈을 불러오지 못했습니다.');
+      return;
+    }
+
+    const rosterRows = state.people.map(p => ({
+      '이름': p.name || '',
+      '소속': p.org || '',
+      '전화번호 뒤 4자리': p.phone || '',
+      '출석상태': spreadsheetStatusLabel(p),
+      '출석시간': spreadsheetIsoTime(p.checkedAt),
+      '현장도착시간': spreadsheetIsoTime(p.arrivedAt)
+    }));
+
+    const total = state.people.length;
+    const individual = state.people.filter(p => p.status === 'individual').length;
+    const present = state.people.filter(p => p.status === 'present').length;
+    const arrived = state.people.filter(p => Boolean(p.arrivedAt)).length;
+    const unknown = Math.max(0, total - individual - present);
+
+    const eventRows = [
+      ['항목','내용'],
+      ['행사명', state.event.title || ''],
+      ['행사 날짜', state.event.event_date || ''],
+      ['장소', state.event.location || ''],
+      ['상태', statusLabel(state.event.status)],
+      ['전체', total],
+      ['출석', present],
+      ['현장도착', arrived],
+      ['개인출발', individual],
+      ['미확인', unknown]
+    ];
+
+    const wb = XLSX.utils.book_new();
+    const rosterSheet = XLSX.utils.json_to_sheet(rosterRows.length ? rosterRows : [{
+      '이름':'',
+      '소속':'',
+      '전화번호 뒤 4자리':'',
+      '출석상태':'',
+      '출석시간':'',
+      '현장도착시간':''
+    }]);
+    const eventSheet = XLSX.utils.aoa_to_sheet(eventRows);
+
+    rosterSheet['!cols'] = [
+      {wch:16},{wch:18},{wch:18},{wch:12},{wch:20},{wch:20}
+    ];
+    eventSheet['!cols'] = [{wch:16},{wch:30}];
+
+    XLSX.utils.book_append_sheet(wb, rosterSheet, '명단');
+    XLSX.utils.book_append_sheet(wb, eventSheet, '행사정보');
+
+    const filename = `${safeSpreadsheetFilename(state.event.event_date)}_${safeSpreadsheetFilename(state.event.title)}_출석명단.xlsx`;
+    await shareOrDownloadXlsx(wb, filename);
+  }
+
+  async function exportSpreadsheetTemplate() {
+    if (!window.XLSX) {
+      toast('Excel 처리 모듈을 불러오지 못했습니다.');
+      return;
+    }
+
+    const rows = [
+      ['이름','소속','전화번호 뒤 4자리'],
+      ['홍길동','예시 소속','1234']
+    ];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:18},{wch:24},{wch:20}];
+    XLSX.utils.book_append_sheet(wb, ws, '명단');
+    await shareOrDownloadXlsx(wb, 'QR출석부_명단_양식.xlsx');
   }
 
   function ensureHistoryUI() {
@@ -2840,6 +3444,7 @@
     ensureParticipantEditUI();
     ensureStatusDashboardUI();
     ensureHistoryUI();
+    ensureSpreadsheetUI();
     loadNotificationState();
     ensureNotificationCenter();
     renderNotificationCenter();

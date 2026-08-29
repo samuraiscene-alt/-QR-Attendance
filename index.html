@@ -84,6 +84,7 @@
   <dialog id="personDialog"><form method="dialog" id="personForm"><div class="dialog-head"><strong>참가자 추가</strong><button type="button" id="personDialogClose" aria-label="닫기">×</button></div><label>이름<input id="personName" required maxlength="30" /></label><label>소속<input id="personOrg" maxlength="50" /></label><label>전화번호 뒤 4자리<input id="personPhone" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" /></label><button class="primary-button" value="default" id="personSave">명단에 추가</button></form></dialog>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="supabase-config.js"></script>
   <script src="app.js"></script>
 </body>
