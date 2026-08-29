@@ -3714,8 +3714,11 @@
   }
 
   function historyStatusLabel(person) {
-    if (person.travel_mode === 'individual') return '개인출발';
-    if (person.attendance_status === 'arrived' || person.arrived_at) return '현장도착';
+    const arrived = person.attendance_status === 'arrived' || Boolean(person.arrived_at);
+    if (person.travel_mode === 'individual') {
+      return arrived ? '개인출발 · 현장도착' : '개인출발';
+    }
+    if (arrived) return '현장도착';
     if (person.attendance_status === 'checked_in' || person.checked_at) return '출석';
     if (person.attendance_status === 'absent') return '결석';
     if (person.attendance_status === 'cancelled') return '취소';
