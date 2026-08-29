@@ -1,6 +1,6 @@
-const CACHE='qr-attendance-v24-arrival-checkin-20260829';
+const CACHE='qr-attendance-v25-proxy-share-20260829';
 const ASSETS=[
-'./','./index.html','./checkin.html','./style.css','./app.js','./manifest.json','./supabase-config.js',
+'./','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'
 ];
 self.addEventListener('install',event=>{self.skipWaiting();event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)));});

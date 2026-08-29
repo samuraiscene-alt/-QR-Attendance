@@ -641,6 +641,84 @@
     if (shareBtn) shareBtn.disabled = false;
   }
 
+  function proxyPageUrl(proxyToken) {
+    const url = new URL('proxy.html', location.href);
+    url.searchParams.set('p', proxyToken);
+    return url.toString();
+  }
+
+  async function shareProxyQr() {
+    if (!state.event || currentQrCycle() !== 'active') {
+      toast('진행 중인 행사에서만 대리 QR을 공유할 수 있습니다.');
+      return;
+    }
+
+    const selectedKind = state.qrView === 'arrival' ? 'arrival' : 'gathering';
+    const selectedToken = selectedKind === 'arrival' ? state.arrivalQrToken : state.qrToken;
+    const shareButton = $('#demoShare');
+
+    if (!selectedToken?.token) {
+      toast('먼저 사용할 QR을 선택해주세요.');
+      return;
+    }
+
+    const label = selectedKind === 'arrival' ? '현장 QR' : '집결지 QR';
+    const validUntil =
+      selectedToken.valid_until ||
+      new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    if (shareButton) {
+      shareButton.disabled = true;
+      shareButton.textContent = '대리 QR 준비 중…';
+    }
+
+    try {
+      const { data, error } = await sb
+        .from('qr_tokens')
+        .insert({
+          event_id: state.event.id,
+          kind: 'proxy',
+          proxy_target_kind: selectedKind,
+          valid_until: validUntil,
+          created_by: state.user?.id || null
+        })
+        .select('id,token,valid_until')
+        .single();
+
+      if (error) throw error;
+
+      const url = proxyPageUrl(data.token);
+      const title = `${state.event.title} · ${label}`;
+      const text = `${state.event.title} ${label} 대리 공유입니다. 행사 종료 시 자동으로 만료됩니다.`;
+
+      if (navigator.share) {
+        try {
+          await navigator.share({ title, text, url });
+          toast(`${label} 대리 공유 완료`);
+          return;
+        } catch (err) {
+          if (err?.name === 'AbortError') return;
+          console.error('share error:', err);
+        }
+      }
+
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+        toast(`${label} 대리 링크를 복사했습니다.`);
+      } else {
+        window.prompt('대리 QR 링크를 복사해주세요.', url);
+      }
+    } catch (err) {
+      console.error('proxy qr create error:', err);
+      toast(`대리 QR 생성 실패 · ${err.message || '확인 필요'}`);
+    } finally {
+      if (shareButton) {
+        shareButton.disabled = false;
+        shareButton.textContent = '대리 QR 공유';
+      }
+    }
+  }
+
   function ensureEventRegistrationUI() {
     if ($('#eventRegistrationDialog')) return;
 
@@ -1716,8 +1794,11 @@
     $('#notificationButton')?.addEventListener('click', () => toast('실시간 출석 알림 연결 준비 완료'));
     $('#ocrButton')?.addEventListener('click', () => toast('OCR 명단 등록은 다음 단계에서 연결합니다.'));
     $('#sheetButton')?.addEventListener('click', () => toast('Excel · Numbers · Sheets 연결은 다음 단계입니다.'));
-    $('#proxyButton')?.addEventListener('click', () => toast('대리 QR은 행사 QR 기능과 함께 연결합니다.'));
-    $('#demoShare')?.addEventListener('click', () => toast('대리 QR 공유는 다음 단계에서 연결합니다.'));
+    $('#proxyButton')?.addEventListener('click', () => {
+      go('qr');
+      toast('집결지 QR 또는 현장 QR을 선택한 뒤 대리 QR 공유를 눌러주세요.');
+    });
+    $('#demoShare')?.addEventListener('click', shareProxyQr);
     $('#demoStart')?.addEventListener('click', startEventQr);
   }
 

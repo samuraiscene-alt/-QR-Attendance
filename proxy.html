@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f7fbfb">
+<title>대리 QR</title>
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:linear-gradient(180deg,#ffffff,#eef8f7);
+  font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+  color:#172126
+}
+main{min-height:100vh;display:grid;place-items:center;padding:24px}
+.card{
+  width:min(100%,440px);
+  background:rgba(255,255,255,.96);
+  border:1px solid #e5eeee;
+  border-radius:30px;
+  padding:24px 20px 22px;
+  box-shadow:0 18px 55px rgba(21,44,52,.11);
+  text-align:center
+}
+.badge{
+  display:inline-flex;
+  align-items:center;
+  min-height:36px;
+  padding:0 14px;
+  border-radius:999px;
+  background:#e8faf7;
+  color:#109f91;
+  font-size:13px;
+  font-weight:900;
+  margin-bottom:12px
+}
+h1{margin:0;font-size:27px;letter-spacing:-.7px}
+.event{margin:8px 0 0;color:#65747b;font-size:15px;font-weight:750}
+.location{margin:4px 0 0;color:#8a969b;font-size:13px}
+.qr-wrap{
+  width:290px;
+  height:290px;
+  max-width:82vw;
+  max-height:82vw;
+  margin:24px auto 18px;
+  padding:14px;
+  border-radius:26px;
+  background:#fff;
+  display:grid;
+  place-items:center;
+  box-shadow:0 10px 28px rgba(22,50,54,.09)
+}
+.qr-wrap img{width:100%;height:100%;object-fit:contain;display:block}
+.note{margin:0;color:#68777d;font-size:14px;line-height:1.6;font-weight:700}
+.until{margin:9px 0 0;color:#9aa4a8;font-size:12px;line-height:1.5}
+.status{
+  display:none;
+  margin-top:18px;
+  padding:16px;
+  border-radius:18px;
+  background:#effbf9;
+  color:#168f84;
+  font-weight:850;
+  line-height:1.5
+}
+.status.bad{background:#fff2f2;color:#d94d55}
+.status.show{display:block}
+.small{margin-top:18px;color:#a1aaae;font-size:11px;line-height:1.5}
+</style>
+</head>
+<body>
+<main>
+  <section class="card">
+    <div class="badge" id="kindBadge">대리 QR</div>
+    <h1 id="qrTitle">QR 준비 중…</h1>
+    <p class="event" id="eventTitle"></p>
+    <p class="location" id="eventLocation"></p>
+
+    <div class="qr-wrap" id="qrWrap" hidden>
+      <img id="qrImage" alt="대리 QR">
+    </div>
+
+    <p class="note" id="note">행사 정보를 확인하고 있습니다.</p>
+    <p class="until" id="validUntil"></p>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <p class="small">이 화면은 행사 대리 담당자가 QR을 보여주기 위한 전용 화면입니다.</p>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-config.js"></script>
+<script>
+(() => {
+  'use strict';
+
+  const params = new URLSearchParams(location.search);
+  const proxyToken = params.get('p');
+
+  const qrTitle = document.getElementById('qrTitle');
+  const eventTitle = document.getElementById('eventTitle');
+  const eventLocation = document.getElementById('eventLocation');
+  const kindBadge = document.getElementById('kindBadge');
+  const qrWrap = document.getElementById('qrWrap');
+  const qrImage = document.getElementById('qrImage');
+  const note = document.getElementById('note');
+  const validUntil = document.getElementById('validUntil');
+  const status = document.getElementById('status');
+
+  const showError = (message) => {
+    qrWrap.hidden = true;
+    status.textContent = message;
+    status.classList.add('show','bad');
+    note.textContent = '';
+    validUntil.textContent = '';
+  };
+
+  const buildCheckinUrl = (token, kind) => {
+    const url = new URL('checkin.html', location.href);
+    url.searchParams.set('t', token);
+    if (kind === 'arrival') url.searchParams.set('mode', 'arrival');
+    return url.toString();
+  };
+
+  async function loadProxy() {
+    if (!proxyToken) {
+      showError('유효한 대리 QR 정보가 없습니다.');
+      return;
+    }
+
+    if (!window.supabase || !window.SUPABASE_URL || !window.SUPABASE_PUBLISHABLE_KEY) {
+      showError('QR 시스템 연결을 확인해주세요.');
+      return;
+    }
+
+    const sb = window.supabase.createClient(
+      window.SUPABASE_URL,
+      window.SUPABASE_PUBLISHABLE_KEY,
+      { auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false} }
+    );
+
+    try {
+      const { data, error } = await sb.rpc('resolve_proxy_qr', {
+        p_proxy_token: proxyToken
+      });
+      if (error) throw error;
+
+      const result = data || {};
+      if (!result.ok) {
+        showError(
+          result.code === 'event_not_active'
+            ? '행사가 종료되어 이 대리 QR은 더 이상 사용할 수 없습니다.'
+            : '이 대리 QR은 만료되었거나 사용할 수 없습니다.'
+        );
+        return;
+      }
+
+      const isArrival = result.target_kind === 'arrival';
+      const label = isArrival ? '현장 도착 QR' : '집결지 출석 QR';
+      const target = buildCheckinUrl(result.target_token, result.target_kind);
+      const imageUrl =
+        'https://quickchart.io/qr?size=360&margin=2&text=' +
+        encodeURIComponent(target);
+
+      document.title = `${label} · 대리 QR`;
+      kindBadge.textContent = '대리 QR';
+      qrTitle.textContent = label;
+      eventTitle.textContent = result.event_title || '';
+      eventLocation.textContent = result.location || '';
+      qrImage.src = imageUrl;
+      qrImage.alt = label;
+      qrWrap.hidden = false;
+      note.textContent = isArrival
+        ? '참가자가 이 QR을 스캔하면 현장 도착 확인 화면이 열립니다.'
+        : '참가자가 이 QR을 스캔하면 집결지 출석 확인 화면이 열립니다.';
+
+      if (result.valid_until) {
+        const d = new Date(result.valid_until);
+        validUntil.textContent = Number.isNaN(d.getTime())
+          ? ''
+          : `${d.toLocaleString('ko-KR')}까지 유효합니다.`;
+      } else {
+        validUntil.textContent = '행사 종료 시 자동으로 만료됩니다.';
+      }
+
+      status.classList.remove('show','bad');
+      status.textContent = '';
+    } catch (err) {
+      console.error(err);
+      showError('대리 QR을 불러오지 못했습니다. 잠시 후 다시 열어주세요.');
+    }
+  }
+
+  loadProxy();
+  setInterval(loadProxy, 60000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) loadProxy();
+  });
+})();
+</script>
+</body>
+</html>
