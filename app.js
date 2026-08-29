@@ -1799,7 +1799,7 @@
             ? `<span class="status-button present" style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;">${escapeHtml(formatCheckTime(p.checkedAt))}</span>`
             : ''}
           <button class="status-button ${p.status}" data-person="${p.linkId}"${p.status === 'present' ? ' style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;"' : ''}>
-            ${labelFor(p.status)}
+            ${personStatusLabel(p)}
           </button>
         </div>
       </div>
@@ -2001,7 +2001,7 @@
             ${p.status === 'present' && p.checkedAt
               ? `<span class="badge present" style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;">${escapeHtml(formatCheckTime(p.checkedAt))}</span>`
               : ''}
-            <span class="badge ${p.status}"${p.status === 'present' ? ' style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;"' : ''}>${labelFor(p.status)}</span>
+            <span class="badge ${p.status}"${p.status === 'present' ? ' style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;"' : ''}>${personStatusLabel(p)}</span>
           </div>
         </div>
       `).join('');
@@ -2034,6 +2034,13 @@
 
   const labelFor = s =>
     ({present:'출석', individual:'개인출발', unknown:'미확인'})[s] || '미확인';
+
+  function personStatusLabel(person) {
+    if (person?.status === 'individual' && person?.arrivedAt) {
+      return '개인출발 · 현장도착';
+    }
+    return labelFor(person?.status);
+  }
 
   async function cycleStatus(linkId) {
     const p = state.people.find(x => x.linkId === linkId);
@@ -3455,7 +3462,9 @@
   }
 
   function spreadsheetStatusLabel(person) {
-    if (person.status === 'individual') return '개인출발';
+    if (person.status === 'individual') {
+      return person.arrivedAt ? '개인출발 · 현장도착' : '개인출발';
+    }
     if (person.arrivedAt) return '현장도착';
     if (person.status === 'present') return '출석';
     return '미확인';
