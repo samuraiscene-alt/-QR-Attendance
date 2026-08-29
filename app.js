@@ -626,92 +626,290 @@
     });
   }
 
-  function ensureAttendancePopup() {
-    if ($('#attendancePopup')) return;
-    const popup = document.createElement('div');
-    popup.id = 'attendancePopup';
-    popup.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(18,28,32,.46);display:none;place-items:center;padding:24px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);';
-    popup.innerHTML = `
-      <div id="attendancePopupCard" style="width:min(calc(100% - 8px),430px);background:rgba(255,255,255,.98);border-radius:32px;padding:34px 24px 24px;box-shadow:0 28px 90px rgba(20,35,40,.28);text-align:center;border:1px solid rgba(255,255,255,.8);">
-        <div id="attendancePopupIcon" style="width:86px;height:86px;border-radius:26px;background:#27c7b7;color:#fff;display:grid;place-items:center;font-size:43px;font-weight:900;margin:0 auto 18px;">✓</div>
-        <div id="attendancePopupKicker" style="font-size:14px;font-weight:900;color:#22a99d;margin-bottom:8px;">출석 완료</div>
-        <strong id="attendancePopupName" style="display:block;font-size:32px;line-height:1.18;margin-bottom:12px;letter-spacing:-.7px;"></strong>
-        <div id="attendancePopupMeta" style="color:#718087;font-size:16px;line-height:1.7;"></div>
-        <div id="attendancePopupTime" style="font-size:28px;font-weight:900;color:#152126;margin-top:14px;"></div>
-        <button id="attendancePopupClose" type="button" style="width:100%;height:58px;border:0;border-radius:18px;background:#21b9aa;color:#fff;font-weight:900;font-size:17px;margin-top:26px;">확인</button>
-      </div>`;
-    document.body.appendChild(popup);
-    $('#attendancePopupClose').addEventListener('click', () => popup.style.display = 'none');
-    popup.addEventListener('click', e => { if (e.target === popup) popup.style.display = 'none'; });
+  const notificationState = {
+    items: [],
+    expanded: false,
+    storageKey: 'qr-attendance-notification-stack-v16'
+  };
+
+  function loadNotificationState() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(notificationState.storageKey) || '[]');
+      notificationState.items = Array.isArray(saved) ? saved.slice(-30) : [];
+    } catch {
+      notificationState.items = [];
+    }
   }
 
-  function showLargeStatusPopup(person, status, checkedAt=null, source='manual') {
+  function saveNotificationState() {
+    try {
+      localStorage.setItem(
+        notificationState.storageKey,
+        JSON.stringify(notificationState.items.slice(-30))
+      );
+    } catch {}
+  }
+
+  function ensureNotificationCenter() {
+    if ($('#attendanceNoticeCenter')) return;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #attendanceNoticeCenter{
+        position:fixed;
+        left:50%;
+        top:50%;
+        transform:translate(-50%,-50%);
+        width:min(calc(100% - 34px),520px);
+        z-index:9000;
+        pointer-events:none;
+      }
+      #attendanceNoticeCenter.is-empty{display:none}
+      #attendanceNoticeStack{
+        position:relative;
+        width:100%;
+        pointer-events:auto;
+      }
+      #attendanceNoticeStack.collapsed{
+        height:74px;
+      }
+      #attendanceNoticeStack.expanded{
+        display:flex;
+        flex-direction:column;
+        gap:10px;
+        max-height:58vh;
+        overflow-y:auto;
+        padding:4px 2px 6px;
+        -webkit-overflow-scrolling:touch;
+      }
+      .attendance-notice{
+        position:relative;
+        width:100%;
+        min-height:70px;
+        border-radius:22px;
+        background:rgba(246,246,248,.94);
+        border:1px solid rgba(255,255,255,.78);
+        box-shadow:0 10px 30px rgba(22,30,36,.18);
+        backdrop-filter:blur(24px);
+        -webkit-backdrop-filter:blur(24px);
+        display:flex;
+        align-items:center;
+        padding:0 54px 0 18px;
+        color:#111820;
+        font-size:15px;
+        font-weight:800;
+        letter-spacing:-.25px;
+        user-select:none;
+        -webkit-user-select:none;
+        touch-action:pan-y;
+        transition:transform .18s ease,opacity .18s ease,top .2s ease;
+        overflow:hidden;
+      }
+      .attendance-notice-line{
+        white-space:nowrap;
+        overflow:hidden;
+        text-overflow:ellipsis;
+        width:100%;
+      }
+      .attendance-notice .notice-status{
+        color:#16a897;
+        font-weight:900;
+      }
+      .attendance-notice[data-status="individual"] .notice-status{color:#8150dc}
+      .attendance-notice[data-status="unknown"] .notice-status{color:#e44c51}
+      #attendanceNoticeStack.collapsed .attendance-notice{
+        position:absolute;
+        left:0;
+        top:0;
+      }
+      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(1){
+        z-index:4;
+        transform:translateY(0) scale(1);
+      }
+      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(2){
+        z-index:3;
+        transform:translateY(-8px) scale(.97);
+        opacity:.92;
+      }
+      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(3){
+        z-index:2;
+        transform:translateY(-15px) scale(.94);
+        opacity:.78;
+      }
+      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(-n+3)~.attendance-notice{
+        opacity:0;
+      }
+      #attendanceNoticeClear{
+        position:absolute;
+        right:8px;
+        top:50%;
+        transform:translateY(-50%);
+        width:36px;
+        height:36px;
+        border:0;
+        border-radius:50%;
+        background:rgba(118,118,128,.18);
+        color:#48515a;
+        font-size:22px;
+        line-height:1;
+        display:grid;
+        place-items:center;
+        z-index:10;
+        pointer-events:auto;
+      }
+      #attendanceNoticeCenter.expanded #attendanceNoticeClear{
+        top:-44px;
+        transform:none;
+      }
+      .attendance-notice.swiping{
+        transition:none;
+      }
+      @media (max-width:390px){
+        .attendance-notice{font-size:14px;padding-left:15px;padding-right:50px}
+      }
+    `;
+    document.head.appendChild(style);
+
+    const center = document.createElement('div');
+    center.id = 'attendanceNoticeCenter';
+    center.className = 'is-empty';
+    center.innerHTML = `
+      <div id="attendanceNoticeStack" class="collapsed" aria-label="출석 알림"></div>
+      <button id="attendanceNoticeClear" type="button" aria-label="알림 전체 삭제">×</button>
+    `;
+    document.body.appendChild(center);
+
+    $('#attendanceNoticeClear').addEventListener('click', e => {
+      e.stopPropagation();
+      notificationState.items = [];
+      notificationState.expanded = false;
+      saveNotificationState();
+      renderNotificationCenter();
+    });
+
+    $('#attendanceNoticeStack').addEventListener('click', e => {
+      if (notificationState.items.length <= 1) return;
+      if (e.target.closest('.attendance-notice')?.dataset.justSwiped === '1') return;
+      notificationState.expanded = !notificationState.expanded;
+      renderNotificationCenter();
+    });
+  }
+
+  function noticeStatusText(status) {
+    return ({
+      present:'출석✓',
+      individual:'개인출발',
+      unknown:'미확인'
+    })[status] || '미확인';
+  }
+
+  function renderNotificationCenter() {
+    ensureNotificationCenter();
+
+    const center = $('#attendanceNoticeCenter');
+    const stack = $('#attendanceNoticeStack');
+    if (!center || !stack) return;
+
+    const items = notificationState.items;
+    center.classList.toggle('is-empty', items.length === 0);
+    center.classList.toggle('expanded', notificationState.expanded);
+    stack.className = notificationState.expanded ? 'expanded' : 'collapsed';
+
+    stack.innerHTML = items.map(item => `
+      <div class="attendance-notice"
+           data-notice-id="${escapeHtml(item.id)}"
+           data-status="${escapeHtml(item.status)}">
+        <div class="attendance-notice-line">
+          ${escapeHtml(item.name || '이름 없음')}
+          <span> · ${escapeHtml(item.phone || '----')}</span>
+          <span> · ${escapeHtml(item.org || '소속 없음')}</span>
+          <span class="notice-status"> · ${escapeHtml(noticeStatusText(item.status))}</span>
+        </div>
+      </div>
+    `).join('');
+
+    $$('.attendance-notice', stack).forEach(installNoticeSwipe);
+  }
+
+  function installNoticeSwipe(card) {
+    let startX = 0;
+    let startY = 0;
+    let dx = 0;
+    let active = false;
+
+    card.addEventListener('touchstart', e => {
+      const t = e.touches?.[0];
+      if (!t) return;
+      startX = t.clientX;
+      startY = t.clientY;
+      dx = 0;
+      active = true;
+      card.classList.add('swiping');
+      card.dataset.justSwiped = '0';
+    }, {passive:true});
+
+    card.addEventListener('touchmove', e => {
+      if (!active) return;
+      const t = e.touches?.[0];
+      if (!t) return;
+      const dy = t.clientY - startY;
+      dx = Math.max(0, t.clientX - startX);
+      if (Math.abs(dx) > Math.abs(dy) && dx > 6) {
+        card.style.transform = `translateX(${dx}px)`;
+        card.style.opacity = String(Math.max(.18, 1 - dx / 260));
+      }
+    }, {passive:true});
+
+    card.addEventListener('touchend', () => {
+      if (!active) return;
+      active = false;
+      card.classList.remove('swiping');
+
+      if (dx > 82) {
+        card.dataset.justSwiped = '1';
+        const id = card.dataset.noticeId;
+        card.style.transform = 'translateX(120%)';
+        card.style.opacity = '0';
+        setTimeout(() => removeNotification(id), 160);
+      } else {
+        card.style.transform = '';
+        card.style.opacity = '';
+        setTimeout(() => { card.dataset.justSwiped = '0'; }, 80);
+      }
+    });
+  }
+
+  function removeNotification(id) {
+    notificationState.items = notificationState.items.filter(x => x.id !== id);
+    if (notificationState.items.length <= 1) notificationState.expanded = false;
+    saveNotificationState();
+    renderNotificationCenter();
+  }
+
+  function pushAttendanceNotification(person, status) {
     const toggle = $('#popupToggle');
     if (toggle && !toggle.checked) return;
 
-    ensureAttendancePopup();
+    ensureNotificationCenter();
 
-    const popup = $('#attendancePopup');
-    const icon = $('#attendancePopupIcon');
-    const kicker = $('#attendancePopupKicker');
-    const name = $('#attendancePopupName');
-    const meta = $('#attendancePopupMeta');
-    const time = $('#attendancePopupTime');
-    const close = $('#attendancePopupClose');
-
-    if (!popup || !icon || !kicker || !name || !meta || !time || !close) return;
-
-    const config = {
-      present: {
-        icon:'✓',
-        title: source === 'qr' ? 'QR 출석 완료' : '출석 완료',
-        bg:'#27c7b7',
-        fg:'#22a99d',
-        button:'#21b9aa'
-      },
-      individual: {
-        icon:'↗',
-        title:'개인출발',
-        bg:'#8e5cf6',
-        fg:'#8150dc',
-        button:'#8150dc'
-      },
-      unknown: {
-        icon:'?',
-        title:'미확인',
-        bg:'#ff5a5f',
-        fg:'#e44c51',
-        button:'#e44c51'
-      }
-    }[status] || {
-      icon:'✓',
-      title:'상태 변경',
-      bg:'#27c7b7',
-      fg:'#22a99d',
-      button:'#21b9aa'
+    const item = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      name: person?.name || '이름 없음',
+      phone: person?.phone || '----',
+      org: person?.org || '소속 없음',
+      status,
+      createdAt: new Date().toISOString()
     };
 
-    icon.textContent = config.icon;
-    icon.style.background = config.bg;
-    kicker.textContent = config.title;
-    kicker.style.color = config.fg;
-    close.style.background = config.button;
-
-    name.textContent = person?.name || '참가자';
-
-    const parts = [];
-    parts.push(person?.org || '소속 없음');
-    if (person?.phone) parts.push(`•••• ${person.phone}`);
-    meta.textContent = parts.join(' · ');
-
-    const t = status === 'present' ? formatCheckTime(checkedAt) : '';
-    time.textContent = t || '';
-
-    popup.style.display = 'grid';
+    notificationState.items.push(item);
+    notificationState.items = notificationState.items.slice(-30);
+    notificationState.expanded = false;
+    saveNotificationState();
+    renderNotificationCenter();
   }
 
   function showAttendancePopup(person, checkedAt) {
-    showLargeStatusPopup(person, 'present', checkedAt, 'qr');
+    pushAttendanceNotification(person, 'present');
   }
 
   function renderPeople() {
@@ -834,7 +1032,7 @@
     await loadPeople();
     renderAll();
     const updatedPerson = state.people.find(x => x.linkId === linkId) || p;
-    showLargeStatusPopup(updatedPerson, next, updatedPerson.checkedAt, 'manual');
+    pushAttendanceNotification(updatedPerson, next);
   }
 
   async function addPerson(e) {
@@ -977,7 +1175,9 @@
 
   async function init() {
     ensureLoginUI();
-    ensureAttendancePopup();
+    loadNotificationState();
+    ensureNotificationCenter();
+    renderNotificationCenter();
     wireUI();
 
     if (!sb) {
