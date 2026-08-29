@@ -915,9 +915,10 @@
       phone: row.participants?.phone_last4 || '',
       status:
         row.travel_mode === 'individual' ? 'individual' :
-        row.attendance_status === 'checked_in' ? 'present' :
+        (row.attendance_status === 'checked_in' || row.attendance_status === 'arrived' || row.checked_at) ? 'present' :
         'unknown',
-      checkedAt: row.checked_at
+      checkedAt: row.checked_at,
+      arrivedAt: row.arrived_at
     }));
   }
 
@@ -1232,6 +1233,7 @@
   function noticeStatusText(status) {
     return ({
       present:'출석✓',
+      arrived:'현장도착✓',
       individual:'개인출발',
       unknown:'미확인'
     })[status] || '미확인';
@@ -1453,6 +1455,10 @@
     pushAttendanceNotification(person, 'present');
   }
 
+  function showArrivalPopup(person, arrivedAt) {
+    pushAttendanceNotification(person, 'arrived');
+  }
+
   function renderPeople() {
     const list = $('#peopleList');
     if (!list) return;
@@ -1475,6 +1481,9 @@
         <div class="person-main">
           <strong>${escapeHtml(p.name)}</strong>
           <small>${escapeHtml(p.org || '소속 없음')}${p.phone ? ` · •••• ${escapeHtml(p.phone)}` : ''}</small>
+          ${p.arrivedAt
+            ? `<small style="color:#0b9184;font-weight:850;">현장 도착 ${escapeHtml(formatCheckTime(p.arrivedAt))}</small>`
+            : ''}
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">
           ${p.status === 'present' && p.checkedAt
@@ -1506,6 +1515,9 @@
         <div>
           <strong>${escapeHtml(p.name)}</strong>
           <small>${escapeHtml(p.org || '소속 없음')}</small>
+          ${p.arrivedAt
+            ? `<small style="display:block;color:#0b9184;font-weight:850;margin-top:3px;">현장 도착 ${escapeHtml(formatCheckTime(p.arrivedAt))}</small>`
+            : ''}
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">
           ${p.status === 'present' && p.checkedAt
@@ -1654,13 +1666,21 @@
             payload?.eventType === 'UPDATE' &&
             payload?.new?.attendance_status === 'checked_in' &&
             payload?.new?.check_source === 'qr';
+          const isQrArrival =
+            payload?.eventType === 'UPDATE' &&
+            payload?.new?.attendance_status === 'arrived' &&
+            payload?.new?.check_source === 'qr' &&
+            Boolean(payload?.new?.arrived_at);
           const participantId = payload?.new?.participant_id || null;
           const checkedAt = payload?.new?.checked_at || null;
+          const arrivedAt = payload?.new?.arrived_at || null;
           await loadPeople();
           renderAll();
+          const person = state.people.find(p => p.participantId === participantId);
           if (isQrCheckIn) {
-            const person = state.people.find(p => p.participantId === participantId);
             showAttendancePopup(person, checkedAt);
+          } else if (isQrArrival) {
+            showArrivalPopup(person, arrivedAt);
           }
         }
       )

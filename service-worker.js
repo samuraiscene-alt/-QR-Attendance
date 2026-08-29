@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v23-qr-kind-switch-20260829';
+const CACHE='qr-attendance-v24-arrival-checkin-20260829';
 const ASSETS=[
 './','./index.html','./checkin.html','./style.css','./app.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'
