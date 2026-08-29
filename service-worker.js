@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v33-google-sheets-direct-20260829';
+const CACHE='qr-attendance-v34-ocr-paper-roster-20260829';
 const ASSETS=[
 './','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'

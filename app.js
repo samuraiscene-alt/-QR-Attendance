@@ -43,6 +43,9 @@
     historyDeleteContext: null,
     spreadsheetRows: [],
     spreadsheetFileName: '',
+    ocrRows: [],
+    ocrRawText: '',
+    ocrFileName: '',
     filter: 'all',
     search: '',
     channel: null,
@@ -2223,7 +2226,7 @@
     $('#manualButton')?.addEventListener('click', () => go('roster'));
     $('#saveSettings')?.addEventListener('click', () => toast('설정 저장 완료'));
     $('#notificationButton')?.addEventListener('click', () => toast('실시간 출석 알림 연결 준비 완료'));
-    $('#ocrButton')?.addEventListener('click', () => toast('OCR 명단 등록은 다음 단계에서 연결합니다.'));
+    $('#ocrButton')?.addEventListener('click', openOcrDialog);
     $('#sheetButton')?.addEventListener('click', openSpreadsheetDialog);
     $('#proxyButton')?.addEventListener('click', () => {
       go('qr');
@@ -2403,6 +2406,502 @@
       $('#spreadsheetImportConfirm').hidden = true;
     } finally {
       if (button) button.disabled = false;
+    }
+  }
+
+  function ensureOcrUI() {
+    if ($('#ocrRosterDialog')) return;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #ocrRosterDialog{
+        width:min(calc(100% - 24px),470px);
+        border:0;
+        border-radius:26px;
+        padding:0;
+        background:#fff;
+        box-shadow:0 22px 70px rgba(20,39,45,.24);
+      }
+      #ocrRosterDialog::backdrop{
+        background:rgba(18,26,30,.38);
+        backdrop-filter:blur(3px);
+        -webkit-backdrop-filter:blur(3px);
+      }
+      .ocr-body{
+        box-sizing:border-box;
+        padding:22px 18px 20px;
+        max-height:86dvh;
+        overflow-y:auto;
+        -webkit-overflow-scrolling:touch;
+      }
+      .ocr-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px}
+      .ocr-head h2{font-size:22px;margin:0 0 4px}
+      .ocr-head p{margin:0;color:#7f8a90;font-size:12px;line-height:1.45}
+      .ocr-close{border:0;background:#f1f3f4;width:38px;height:38px;border-radius:50%;font-size:23px;color:#596267;flex:0 0 auto}
+      .ocr-source-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+      .ocr-source-button{
+        min-height:62px;border:1px solid #dfe9eb;border-radius:17px;background:#fff;
+        color:#159f93;font-size:13px;font-weight:900;padding:10px;
+      }
+      .ocr-source-button small{display:block;color:#879399;font-size:10px;font-weight:700;margin-top:4px}
+      .ocr-privacy{
+        margin:11px 0 0;padding:11px 12px;border-radius:14px;background:#f4fbfa;
+        color:#61747a;font-size:10px;line-height:1.5;
+      }
+      .ocr-preview-image{
+        width:100%;max-height:220px;object-fit:contain;background:#f5f7f8;border-radius:15px;
+        margin-top:13px;border:1px solid #e6ecee;
+      }
+      .ocr-progress-wrap{margin-top:13px}
+      .ocr-progress-label{display:flex;justify-content:space-between;gap:10px;color:#67777d;font-size:11px;font-weight:800}
+      .ocr-progress{height:9px;background:#edf2f3;border-radius:999px;overflow:hidden;margin-top:7px}
+      .ocr-progress span{display:block;height:100%;width:0;background:#24c7b7;border-radius:999px;transition:width .2s ease}
+      .ocr-raw-box{margin-top:14px}
+      .ocr-raw-box summary{cursor:pointer;color:#6c7a80;font-size:11px;font-weight:850}
+      .ocr-raw-text{
+        width:100%;box-sizing:border-box;min-height:110px;margin-top:8px;border:1px solid #e1e9eb;
+        border-radius:13px;padding:10px;font-size:12px;line-height:1.45;resize:vertical;background:#fafcfc;
+      }
+      .ocr-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:14px 0 10px}
+      .ocr-summary div{background:#f7fafb;border-radius:13px;padding:10px 5px;text-align:center}
+      .ocr-summary span{display:block;color:#89949a;font-size:9px;font-weight:800}
+      .ocr-summary b{display:block;font-size:18px;margin-top:3px}
+      .ocr-row{
+        display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) 76px;gap:7px;
+        align-items:center;padding:8px 0;border-top:1px solid #edf1f2;
+      }
+      .ocr-row:first-child{border-top:0}
+      .ocr-row input{
+        box-sizing:border-box;width:100%;height:40px;border:1px solid #dfe7e9;border-radius:11px;
+        padding:0 9px;font-size:13px;background:#fff;min-width:0;
+      }
+      .ocr-row input.ocr-phone{text-align:center}
+      .ocr-row-state{font-size:9px;font-weight:900;text-align:right;line-height:1.25}
+      .ocr-row-state.ok{color:#159f93}.ocr-row-state.skip{color:#a66f15}.ocr-row-state.bad{color:#d94d55}
+      .ocr-add-row{width:100%;height:42px;border:1px dashed #bfe4df;background:#f5fcfb;color:#159f93;border-radius:13px;font-weight:900;margin-top:8px}
+      .ocr-import{width:100%;height:50px;border:0;border-radius:15px;background:#22c7b7;color:#fff;font-weight:900;font-size:15px;margin-top:12px}
+      .ocr-import[hidden]{display:none}
+      .ocr-message{margin-top:13px;padding:13px;border-radius:14px;background:#fff5f6;color:#bf4049;border:1px solid #ffd7da;font-size:12px;line-height:1.5}
+    `;
+    document.head.appendChild(style);
+
+    const dialog = document.createElement('dialog');
+    dialog.id = 'ocrRosterDialog';
+    dialog.innerHTML = `
+      <div class="ocr-body">
+        <div class="ocr-head">
+          <div>
+            <h2>종이 명단 촬영</h2>
+            <p>사진의 이름 · 소속 · 전화번호를 읽고, 확인 후 현재 행사 명단에 등록합니다.</p>
+          </div>
+          <button type="button" class="ocr-close" id="ocrClose" aria-label="닫기">×</button>
+        </div>
+
+        <div class="ocr-source-grid">
+          <button type="button" class="ocr-source-button" id="ocrCameraButton">카메라 촬영<small>지금 종이 명단 촬영</small></button>
+          <button type="button" class="ocr-source-button" id="ocrPhotoButton">사진 선택<small>사진 보관함 · 파일</small></button>
+        </div>
+        <input id="ocrCameraInput" type="file" accept="image/*" capture="environment" hidden>
+        <input id="ocrPhotoInput" type="file" accept="image/*" hidden>
+
+        <div class="ocr-privacy">사진은 Supabase나 Google Sheets에 저장하지 않고, 이 기기에서 글자를 읽은 뒤 명단 데이터만 등록합니다.</div>
+
+        <div id="ocrWorkArea"></div>
+        <button type="button" id="ocrImportButton" class="ocr-import" hidden>등록 가능한 명단 불러오기</button>
+      </div>
+    `;
+    document.body.appendChild(dialog);
+
+    $('#ocrClose')?.addEventListener('click', () => {
+      resetOcrDialog();
+      dialog.close();
+    });
+    $('#ocrCameraButton')?.addEventListener('click', () => $('#ocrCameraInput')?.click());
+    $('#ocrPhotoButton')?.addEventListener('click', () => $('#ocrPhotoInput')?.click());
+    $('#ocrCameraInput')?.addEventListener('change', handleOcrImageFile);
+    $('#ocrPhotoInput')?.addEventListener('change', handleOcrImageFile);
+    $('#ocrImportButton')?.addEventListener('click', importOcrRows);
+  }
+
+  function openOcrDialog() {
+    if (!state.event) {
+      toast('먼저 행사를 등록해주세요.');
+      return;
+    }
+    ensureOcrUI();
+    resetOcrDialog();
+    $('#ocrRosterDialog')?.showModal();
+  }
+
+  function resetOcrDialog() {
+    state.ocrRows = [];
+    state.ocrRawText = '';
+    state.ocrFileName = '';
+    const area = $('#ocrWorkArea');
+    const importButton = $('#ocrImportButton');
+    if (area) area.innerHTML = '';
+    if (importButton) {
+      importButton.hidden = true;
+      importButton.disabled = false;
+      importButton.textContent = '등록 가능한 명단 불러오기';
+    }
+    const camera = $('#ocrCameraInput');
+    const photo = $('#ocrPhotoInput');
+    if (camera) camera.value = '';
+    if (photo) photo.value = '';
+  }
+
+  async function ensureTesseractLoaded() {
+    if (window.Tesseract?.createWorker) return;
+
+    await new Promise((resolve, reject) => {
+      const existing = document.querySelector('script[data-qr-ocr="tesseract"]');
+      if (existing) {
+        existing.addEventListener('load', resolve, { once:true });
+        existing.addEventListener('error', reject, { once:true });
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+      script.async = true;
+      script.dataset.qrOcr = 'tesseract';
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('OCR 모듈 다운로드 실패'));
+      document.head.appendChild(script);
+    });
+
+    if (!window.Tesseract?.createWorker) throw new Error('OCR 모듈 초기화 실패');
+  }
+
+  function setOcrProgress(statusText='분석 준비', progress=0) {
+    const label = $('#ocrProgressText');
+    const pct = $('#ocrProgressPercent');
+    const bar = $('#ocrProgressBar');
+    const n = Math.max(0, Math.min(1, Number(progress) || 0));
+    if (label) label.textContent = statusText;
+    if (pct) pct.textContent = `${Math.round(n * 100)}%`;
+    if (bar) bar.style.width = `${Math.round(n * 100)}%`;
+  }
+
+  function ocrLogger(message) {
+    const progress = Number(message?.progress) || 0;
+    const map = {
+      'loading tesseract core':'OCR 엔진 불러오는 중',
+      'initializing tesseract':'OCR 엔진 준비 중',
+      'loading language traineddata':'한국어 글자 데이터 불러오는 중',
+      'initializing api':'문자 인식 준비 중',
+      'recognizing text':'명단 글자 읽는 중'
+    };
+    setOcrProgress(map[message?.status] || '명단 분석 중', progress);
+  }
+
+  async function handleOcrImageFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const area = $('#ocrWorkArea');
+    const importButton = $('#ocrImportButton');
+    if (!area || !importButton) return;
+
+    state.ocrFileName = file.name || '촬영 사진';
+    state.ocrRows = [];
+    state.ocrRawText = '';
+    importButton.hidden = true;
+
+    const imageUrl = URL.createObjectURL(file);
+    area.innerHTML = `
+      <img class="ocr-preview-image" id="ocrPreviewImage" alt="종이 명단 미리보기">
+      <div class="ocr-progress-wrap">
+        <div class="ocr-progress-label"><span id="ocrProgressText">OCR 준비 중</span><span id="ocrProgressPercent">0%</span></div>
+        <div class="ocr-progress"><span id="ocrProgressBar"></span></div>
+      </div>
+    `;
+    $('#ocrPreviewImage').src = imageUrl;
+
+    try {
+      await ensureTesseractLoaded();
+      setOcrProgress('한국어 OCR 시작', 0.02);
+
+      const worker = await Tesseract.createWorker(['kor','eng'], 1, {
+        logger: ocrLogger
+      });
+
+      const result = await worker.recognize(file);
+      await worker.terminate();
+
+      state.ocrRawText = String(result?.data?.text || '').trim();
+      state.ocrRows = parseOcrRosterText(state.ocrRawText);
+      setOcrProgress('분석 완료', 1);
+      renderOcrRows(imageUrl);
+    } catch (error) {
+      console.error('ocr recognize error:', error);
+      area.innerHTML += `<div class="ocr-message">사진 글자 읽기에 실패했습니다.<br>${escapeHtml(error.message || '인터넷 연결 또는 사진 품질을 확인해주세요.')}</div>`;
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(imageUrl), 30000);
+    }
+  }
+
+  function cleanOcrToken(value='') {
+    return String(value)
+      .replace(/[|｜]/g, ' ')
+      .replace(/[,:;]+$/g, '')
+      .trim();
+  }
+
+  function looksLikeOcrHeader(line='') {
+    const compact = line.replace(/\s/g, '');
+    const hits = ['이름','성명','소속','전화','연락처','핸드폰','휴대폰','번호'].filter(x => compact.includes(x)).length;
+    return hits >= 2;
+  }
+
+  function parseOcrRosterText(text='') {
+    const lines = String(text)
+      .replace(/\r/g, '')
+      .split('\n')
+      .map(line => line.replace(/[｜|]/g, ' ').replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+
+    const parsed = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i];
+      if (!line || looksLikeOcrHeader(line)) continue;
+
+      line = line.replace(/^\s*\d{1,3}[.)번]?\s+/, '');
+      const phoneMatches = line.match(/\d[\d\s-]{2,}\d/g) || [];
+      const phoneSource = phoneMatches.length ? phoneMatches[phoneMatches.length - 1] : '';
+      const phoneDigits = phoneSource.replace(/\D/g, '');
+      const phone = phoneDigits.length >= 4 ? phoneDigits.slice(-4) : '';
+
+      let withoutPhone = phoneSource ? line.replace(phoneSource, ' ').replace(/\s+/g, ' ').trim() : line;
+      let tokens = withoutPhone.split(' ').map(cleanOcrToken).filter(Boolean);
+
+      while (tokens.length && /^\d+$/.test(tokens[0])) tokens.shift();
+      if (!tokens.length && !phone) continue;
+
+      let name = '';
+      let nameIndex = -1;
+      for (let t = 0; t < tokens.length; t++) {
+        const token = tokens[t];
+        if (/^[가-힣]{2,5}$/.test(token) || /^[A-Za-z][A-Za-z.'-]{1,24}$/.test(token)) {
+          name = token;
+          nameIndex = t;
+          break;
+        }
+      }
+
+      if (!name && tokens.length) {
+        name = tokens[0].slice(0, 30);
+        nameIndex = 0;
+      }
+
+      const orgTokens = tokens.filter((_, idx) => idx !== nameIndex);
+      const org = orgTokens.join(' ').slice(0, 50);
+
+      parsed.push({
+        rowNumber: i + 1,
+        name,
+        org,
+        phone,
+        state:'bad',
+        reason:'확인 필요'
+      });
+    }
+
+    const deduped = [];
+    const seen = new Set();
+    for (const row of parsed) {
+      const signature = `${row.name}|${row.org}|${row.phone}`;
+      if (!row.name && !row.phone) continue;
+      if (seen.has(signature)) continue;
+      seen.add(signature);
+      deduped.push(row);
+    }
+
+    state.ocrRows = deduped;
+    refreshOcrRowStates();
+    return state.ocrRows;
+  }
+
+  function refreshOcrRowStates() {
+    const currentKeys = new Set(state.people.map(p => importPersonKey(p.name, p.phone)));
+    const scannedKeys = new Set();
+
+    state.ocrRows.forEach(row => {
+      row.name = String(row.name || '').trim();
+      row.org = String(row.org || '').trim();
+      row.phone = normalizeImportPhone(row.phone || '');
+
+      if (!row.name) {
+        row.state = 'bad';
+        row.reason = '이름 확인';
+        return;
+      }
+      if (!/^\d{4}$/.test(row.phone)) {
+        row.state = 'bad';
+        row.reason = '전화 4자리';
+        return;
+      }
+
+      const key = importPersonKey(row.name, row.phone);
+      if (currentKeys.has(key)) {
+        row.state = 'skip';
+        row.reason = '현재 명단 중복';
+      } else if (scannedKeys.has(key)) {
+        row.state = 'skip';
+        row.reason = '사진 내 중복';
+      } else {
+        row.state = 'ok';
+        row.reason = '등록 가능';
+        scannedKeys.add(key);
+      }
+    });
+  }
+
+  function renderOcrRows(imageUrl='') {
+    const area = $('#ocrWorkArea');
+    const importButton = $('#ocrImportButton');
+    if (!area || !importButton) return;
+
+    refreshOcrRowStates();
+    const ok = state.ocrRows.filter(r => r.state === 'ok').length;
+    const skip = state.ocrRows.filter(r => r.state === 'skip').length;
+    const bad = state.ocrRows.filter(r => r.state === 'bad').length;
+
+    const oldImage = $('#ocrPreviewImage')?.src || imageUrl;
+    area.innerHTML = `
+      ${oldImage ? `<img class="ocr-preview-image" id="ocrPreviewImage" alt="종이 명단 미리보기" src="${escapeHtml(oldImage)}">` : ''}
+      <div class="ocr-summary">
+        <div><span>등록 가능</span><b>${ok}</b></div>
+        <div><span>중복 제외</span><b>${skip}</b></div>
+        <div><span>확인 필요</span><b>${bad}</b></div>
+      </div>
+      <div id="ocrEditableRows">
+        ${state.ocrRows.length ? state.ocrRows.map((row, index) => `
+          <div class="ocr-row" data-ocr-index="${index}">
+            <input class="ocr-name" value="${escapeHtml(row.name)}" maxlength="30" placeholder="이름">
+            <input class="ocr-org" value="${escapeHtml(row.org)}" maxlength="50" placeholder="소속">
+            <div>
+              <input class="ocr-phone" value="${escapeHtml(row.phone)}" inputmode="numeric" maxlength="4" placeholder="뒤4자리">
+              <div class="ocr-row-state ${row.state}">${escapeHtml(row.reason)}</div>
+            </div>
+          </div>
+        `).join('') : '<div class="ocr-message">자동으로 분리된 명단이 없습니다. 아래 `+ 행 추가`로 직접 보정할 수 있습니다.</div>'}
+      </div>
+      <button type="button" class="ocr-add-row" id="ocrAddRow">+ 행 추가</button>
+      <details class="ocr-raw-box">
+        <summary>OCR 원문 확인</summary>
+        <textarea class="ocr-raw-text" id="ocrRawText">${escapeHtml(state.ocrRawText)}</textarea>
+      </details>
+    `;
+
+    $$('.ocr-row', area).forEach(rowEl => {
+      const index = Number(rowEl.dataset.ocrIndex);
+      const name = $('.ocr-name', rowEl);
+      const org = $('.ocr-org', rowEl);
+      const phone = $('.ocr-phone', rowEl);
+      [name, org, phone].forEach(input => input?.addEventListener('input', () => {
+        const row = state.ocrRows[index];
+        if (!row) return;
+        row.name = name?.value || '';
+        row.org = org?.value || '';
+        row.phone = phone?.value || '';
+        renderOcrRows($('#ocrPreviewImage')?.src || oldImage);
+      }));
+    });
+
+    $('#ocrAddRow')?.addEventListener('click', () => {
+      state.ocrRows.push({ rowNumber:state.ocrRows.length + 1, name:'', org:'', phone:'', state:'bad', reason:'이름 확인' });
+      renderOcrRows($('#ocrPreviewImage')?.src || oldImage);
+      requestAnimationFrame(() => {
+        const rows = $$('.ocr-row', area);
+        rows.at(-1)?.querySelector('.ocr-name')?.focus();
+      });
+    });
+
+    $('#ocrRawText')?.addEventListener('change', e => {
+      state.ocrRawText = e.target.value || '';
+    });
+
+    importButton.hidden = ok === 0;
+    importButton.textContent = `등록 가능한 ${ok}명 불러오기`;
+  }
+
+  async function importOcrRows() {
+    if (!state.event) {
+      toast('먼저 행사를 등록해주세요.');
+      return;
+    }
+
+    refreshOcrRowStates();
+    const rows = state.ocrRows.filter(r => r.state === 'ok');
+    if (!rows.length) {
+      toast('등록 가능한 명단이 없습니다.');
+      return;
+    }
+
+    const button = $('#ocrImportButton');
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'OCR 명단 등록 중…';
+    }
+
+    try {
+      const reusable = await findReusableParticipants(rows);
+      const participantIdByKey = new Map();
+
+      for (const p of reusable) {
+        participantIdByKey.set(importPersonKey(p.name, p.phone_last4), p.id);
+      }
+
+      const needCreate = rows.filter(r => !participantIdByKey.has(importPersonKey(r.name, r.phone)));
+
+      for (let i = 0; i < needCreate.length; i += 100) {
+        const batch = needCreate.slice(i, i + 100);
+        const { data, error } = await sb
+          .from('participants')
+          .insert(batch.map(r => ({
+            organization_id: state.member.organization_id,
+            name: r.name,
+            affiliation: r.org || null,
+            phone_last4: r.phone
+          })))
+          .select('id,name,affiliation,phone_last4');
+        if (error) throw error;
+
+        for (const p of data || []) {
+          participantIdByKey.set(importPersonKey(p.name, p.phone_last4), p.id);
+        }
+      }
+
+      const links = rows
+        .map(r => ({
+          event_id: state.event.id,
+          participant_id: participantIdByKey.get(importPersonKey(r.name, r.phone))
+        }))
+        .filter(x => x.participant_id);
+
+      for (let i = 0; i < links.length; i += 100) {
+        const { error } = await sb
+          .from('event_participants')
+          .insert(links.slice(i, i + 100));
+        if (error) throw error;
+      }
+
+      await loadPeople();
+      renderAll();
+      queueGoogleSheetsCurrentSync();
+      resetOcrDialog();
+      $('#ocrRosterDialog')?.close();
+      toast(`OCR 명단 ${links.length}명 등록 완료`);
+    } catch (error) {
+      console.error('ocr import error:', error);
+      toast(`OCR 명단 등록 실패 · ${error.message || '확인 필요'}`);
+      if (button) {
+        button.disabled = false;
+        button.textContent = `등록 가능한 ${rows.length}명 불러오기`;
+      }
     }
   }
 
@@ -3655,6 +4154,7 @@
     ensureStatusDashboardUI();
     ensureHistoryUI();
     ensureSpreadsheetUI();
+    ensureOcrUI();
     loadNotificationState();
     ensureNotificationCenter();
     renderNotificationCenter();
