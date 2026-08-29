@@ -34,6 +34,7 @@
     organization: null,
     event: null,
     people: [],
+    logs: [],
     filter: 'all',
     search: '',
     channel: null,
@@ -288,6 +289,7 @@
       installLogout();
       await loadLatestEvent();
       await loadPeople();
+      await loadAttendanceLogs();
       await ensureManualEndQrValidity();
       await loadGatheringQr();
       subscribeRealtime();
@@ -863,6 +865,7 @@
       try { localStorage.removeItem(QR_NEXT_EVENT_KEY); } catch {}
 
       await loadPeople();
+      await loadAttendanceLogs();
       subscribeRealtime();
       renderAll();
       $('#eventRegistrationDialog')?.close();
@@ -1008,6 +1011,36 @@
         'unknown',
       checkedAt: row.checked_at,
       arrivedAt: row.arrived_at
+    }));
+  }
+
+  async function loadAttendanceLogs() {
+    if (!state.event) {
+      state.logs = [];
+      return;
+    }
+
+    const { data, error } = await sb
+      .from('attendance_logs')
+      .select('id,participant_id,action,source,created_at,participants(name,affiliation)')
+      .eq('event_id', state.event.id)
+      .order('created_at', { ascending:false })
+      .limit(100);
+
+    if (error) {
+      console.error('attendance logs load error:', error);
+      state.logs = [];
+      return;
+    }
+
+    state.logs = (data || []).map(row => ({
+      id: row.id,
+      participantId: row.participant_id,
+      name: row.participants?.name || '참가자',
+      org: row.participants?.affiliation || '',
+      action: row.action || '',
+      source: row.source || '',
+      createdAt: row.created_at
     }));
   }
 
@@ -1744,33 +1777,223 @@
     });
   }
 
+  function ensureStatusDashboardUI() {
+    const screen = $('[data-screen="status"]');
+    if (!screen || $('#statusDetailStats')) return;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #statusDetailStats{
+        display:grid;
+        grid-template-columns:repeat(2,minmax(0,1fr));
+        gap:10px;
+        margin:12px 0 14px;
+      }
+      .status-detail-stat{
+        background:#fff;
+        border:1px solid #e8edef;
+        border-radius:18px;
+        padding:14px 15px;
+        box-shadow:0 5px 16px rgba(27,51,58,.04);
+      }
+      .status-detail-stat span{
+        display:block;
+        color:#7c878d;
+        font-size:12px;
+        font-weight:800;
+        margin-bottom:5px;
+      }
+      .status-detail-stat strong{
+        font-size:24px;
+        line-height:1;
+        font-weight:900;
+        color:#20292d;
+      }
+      .status-history-card{
+        margin-top:14px;
+        background:#fff;
+        border:1px solid #e8edef;
+        border-radius:20px;
+        padding:17px 15px 8px;
+      }
+      .status-history-head{
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        margin-bottom:8px;
+      }
+      .status-history-head strong{font-size:17px}
+      .status-history-head small{
+        color:#8a959b;
+        font-size:12px;
+        font-weight:750;
+      }
+      .status-log-row{
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:12px;
+        padding:13px 2px;
+        border-top:1px solid #eef2f3;
+      }
+      .status-log-row:first-child{border-top:0}
+      .status-log-main{min-width:0}
+      .status-log-main strong{
+        display:block;
+        font-size:14px;
+        white-space:nowrap;
+        overflow:hidden;
+        text-overflow:ellipsis;
+      }
+      .status-log-main small{
+        display:block;
+        color:#7d888e;
+        font-size:12px;
+        margin-top:3px;
+      }
+      .status-log-side{
+        flex:0 0 auto;
+        text-align:right;
+      }
+      .status-log-side b{
+        display:block;
+        color:#159f93;
+        font-size:13px;
+      }
+      .status-log-side small{
+        display:block;
+        color:#929ca1;
+        font-size:11px;
+        margin-top:3px;
+      }
+      .status-log-empty{
+        padding:20px 4px;
+        color:#8a959b;
+        text-align:center;
+        font-size:13px;
+      }
+    `;
+    document.head.appendChild(style);
+
+    const summary = $('.summary-card', screen);
+    const detail = document.createElement('div');
+    detail.id = 'statusDetailStats';
+    detail.innerHTML = `
+      <div class="status-detail-stat"><span>전체</span><strong id="statusTotal">0</strong></div>
+      <div class="status-detail-stat"><span>출석</span><strong id="statusPresent">0</strong></div>
+      <div class="status-detail-stat"><span>현장도착</span><strong id="statusArrived">0</strong></div>
+      <div class="status-detail-stat"><span>개인출발</span><strong id="statusIndividual">0</strong></div>
+      <div class="status-detail-stat"><span>미확인</span><strong id="statusUnknown">0</strong></div>
+    `;
+    summary?.insertAdjacentElement('afterend', detail);
+
+    const statusList = $('#statusList');
+    const history = document.createElement('div');
+    history.className = 'status-history-card';
+    history.innerHTML = `
+      <div class="status-history-head">
+        <strong>출석 기록</strong>
+        <small id="statusLogCount">0건</small>
+      </div>
+      <div id="statusHistoryList"></div>
+    `;
+    statusList?.insertAdjacentElement('afterend', history);
+  }
+
+  function attendanceActionLabel(action) {
+    return ({
+      check_in:'QR 출석',
+      manual_check_in:'수동 출석',
+      arrival:'현장 도착',
+      set_individual:'개인출발',
+      set_bus:'버스출발',
+      manual_uncheck:'미확인 변경',
+      mark_absent:'결석',
+      correction:'정정'
+    })[action] || '상태 변경';
+  }
+
+  function attendanceSourceLabel(source) {
+    return source === 'qr' ? 'QR' : source === 'manual' ? '수동' : (source || '시스템');
+  }
+
+  function formatLogDateTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleString('ko-KR', {
+      month:'numeric',
+      day:'numeric',
+      hour:'2-digit',
+      minute:'2-digit',
+      hour12:false
+    });
+  }
+
   function renderStatus() {
+    ensureStatusDashboardUI();
+
     const list = $('#statusList');
     if (!list) return;
 
+    const total = state.people.length;
+    const present = state.people.filter(p => p.status === 'present').length;
+    const individual = state.people.filter(p => p.status === 'individual').length;
+    const unknown = Math.max(0, total - present - individual);
+    const arrived = state.people.filter(p => Boolean(p.arrivedAt)).length;
+
+    if ($('#statusTotal')) $('#statusTotal').textContent = total;
+    if ($('#statusPresent')) $('#statusPresent').textContent = present;
+    if ($('#statusArrived')) $('#statusArrived').textContent = arrived;
+    if ($('#statusIndividual')) $('#statusIndividual').textContent = individual;
+    if ($('#statusUnknown')) $('#statusUnknown').textContent = unknown;
+
     if (!state.people.length) {
-      list.innerHTML = '<div class="empty-state">출석 기록이 없습니다.</div>';
+      list.innerHTML = '<div class="empty-state">출석 현황이 없습니다.</div>';
+    } else {
+      list.innerHTML = state.people.map(p => `
+        <div class="status-row">
+          <div>
+            <strong>${escapeHtml(p.name)}</strong>
+            <small>${escapeHtml(p.org || '소속 없음')}</small>
+            ${p.arrivedAt
+              ? `<small style="display:block;color:#0b9184;font-weight:850;margin-top:3px;">현장 도착 ${escapeHtml(formatCheckTime(p.arrivedAt))}</small>`
+              : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">
+            ${p.status === 'present' && p.checkedAt
+              ? `<span class="badge present" style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;">${escapeHtml(formatCheckTime(p.checkedAt))}</span>`
+              : ''}
+            <span class="badge ${p.status}"${p.status === 'present' ? ' style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;"' : ''}>${labelFor(p.status)}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    const history = $('#statusHistoryList');
+    const count = $('#statusLogCount');
+    if (count) count.textContent = `${state.logs.length}건`;
+    if (!history) return;
+
+    if (!state.logs.length) {
+      history.innerHTML = '<div class="status-log-empty">아직 출석 변경 기록이 없습니다.</div>';
       return;
     }
 
-    list.innerHTML = state.people.map(p => `
-      <div class="status-row">
-        <div>
-          <strong>${escapeHtml(p.name)}</strong>
-          <small>${escapeHtml(p.org || '소속 없음')}</small>
-          ${p.arrivedAt
-            ? `<small style="display:block;color:#0b9184;font-weight:850;margin-top:3px;">현장 도착 ${escapeHtml(formatCheckTime(p.arrivedAt))}</small>`
-            : ''}
+    history.innerHTML = state.logs.map(log => `
+      <div class="status-log-row">
+        <div class="status-log-main">
+          <strong>${escapeHtml(log.name)}${log.org ? ` · ${escapeHtml(log.org)}` : ''}</strong>
+          <small>${escapeHtml(formatLogDateTime(log.createdAt))}</small>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">
-          ${p.status === 'present' && p.checkedAt
-            ? `<span class="badge present" style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;">${escapeHtml(formatCheckTime(p.checkedAt))}</span>`
-            : ''}
-          <span class="badge ${p.status}"${p.status === 'present' ? ' style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;"' : ''}>${labelFor(p.status)}</span>
+        <div class="status-log-side">
+          <b>${escapeHtml(attendanceActionLabel(log.action))}</b>
+          <small>${escapeHtml(attendanceSourceLabel(log.source))}</small>
         </div>
       </div>
     `).join('');
   }
+
 
   const labelFor = s =>
     ({present:'출석', individual:'개인출발', unknown:'미확인'})[s] || '미확인';
@@ -1833,6 +2056,7 @@
     if (logError) console.error('attendance log error:', logError);
 
     await loadPeople();
+    await loadAttendanceLogs();
     renderAll();
     const updatedPerson = state.people.find(x => x.linkId === linkId) || p;
     pushAttendanceNotification(updatedPerson, next);
@@ -1927,6 +2151,19 @@
           }
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event:'INSERT',
+          schema:'public',
+          table:'attendance_logs',
+          filter:`event_id=eq.${state.event.id}`
+        },
+        async () => {
+          await loadAttendanceLogs();
+          renderStatus();
+        }
+      )
       .subscribe();
   }
 
@@ -1981,6 +2218,9 @@
     $$('.tab').forEach(x =>
       x.classList.toggle('active', x.dataset.go === screen)
     );
+    if (screen === 'status') {
+      loadAttendanceLogs().then(renderStatus).catch(console.error);
+    }
     window.scrollTo({top:0, behavior:'smooth'});
   }
 
@@ -1998,6 +2238,7 @@
     ensureLoginUI();
     ensureEventRegistrationUI();
     ensureParticipantEditUI();
+    ensureStatusDashboardUI();
     loadNotificationState();
     ensureNotificationCenter();
     renderNotificationCenter();

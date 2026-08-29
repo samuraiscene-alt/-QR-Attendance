@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v29-roster-edit-delete-20260829';
+const CACHE='qr-attendance-v30-status-history-20260829';
 const ASSETS=[
 './','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'
