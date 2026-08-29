@@ -491,8 +491,23 @@
     state.arrivalQrToken = rows.find(x => x.kind === 'arrival') || null;
   }
 
+  function appBaseUrl() {
+    const path = location.pathname || '/';
+
+    if (path.endsWith('/')) {
+      return `${location.origin}${path}`;
+    }
+
+    const lastSegment = path.split('/').pop() || '';
+    if (lastSegment.includes('.')) {
+      return `${location.origin}${path.slice(0, path.lastIndexOf('/') + 1)}`;
+    }
+
+    return `${location.origin}${path}/`;
+  }
+
   function checkinUrl(token, kind='gathering') {
-    const url = new URL('checkin.html', location.href);
+    const url = new URL('checkin.html', appBaseUrl());
     url.searchParams.set('t', token);
     if (kind === 'arrival') url.searchParams.set('mode', 'arrival');
     return url.toString();
@@ -671,7 +686,7 @@
   }
 
   function proxyPageUrl(proxyToken) {
-    const url = new URL('proxy.html', location.href);
+    const url = new URL('proxy.html', appBaseUrl());
     url.searchParams.set('p', proxyToken);
     return url.toString();
   }
