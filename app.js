@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.12 · bell individual delete identity fix + V36.11 behavior preserved
+  // QR Attendance V36.13 · Supabase-synced bell archive + cross-client delete sync + V36.12 behavior preserved
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -308,6 +308,7 @@
       await loadLatestEvent();
       await loadPeople();
       await loadAttendanceLogs();
+      await refreshBellNotificationsFromServer();
       await ensureManualEndQrValidity();
       await loadGatheringQr();
       subscribeRealtime();
@@ -1050,6 +1051,7 @@
 
       await loadPeople();
       await loadAttendanceLogs();
+      await refreshBellNotificationsFromServer();
       subscribeRealtime();
       renderAll();
       queueGoogleSheetsCurrentSync(300);
@@ -1142,6 +1144,7 @@
     clearPopupTimer();
     notificationState.popupItems = [];
     notificationState.bellItems = [];
+    notificationState.bellDismissedIds = new Set();
     notificationState.expanded = false;
     notificationState.eventId = state.event.id;
     saveBellNotificationState();
@@ -1320,6 +1323,8 @@
   const notificationState = {
     popupItems: [],
     bellItems: [],
+    bellDismissedIds: new Set(),
+    bellSyncBusy: false,
     popupTimer: null,
     freshPopupId: null,
     seenIds: [],
@@ -1343,31 +1348,18 @@
 
   function loadNotificationState() {
     notificationState.popupItems = [];
+    notificationState.bellItems = [];
+    notificationState.bellDismissedIds = new Set();
     notificationState.freshPopupId = null;
+    notificationState.eventId = null;
     notificationState.expanded = false;
 
+    // V36.13부터 종 보관함은 Supabase가 기준입니다.
+    // Safari/PWA마다 달랐던 이전 localStorage 종 목록은 더 이상 사용하지 않습니다.
     try {
-      const saved = JSON.parse(localStorage.getItem(notificationState.bellStorageKey) || 'null');
-      if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
-        notificationState.eventId = saved.eventId || null;
-        notificationState.bellItems = Array.isArray(saved.items) ? saved.items : [];
-      } else {
-        notificationState.bellItems = [];
-      }
-    } catch {
-      notificationState.bellItems = [];
-      notificationState.eventId = null;
-    }
-
-    // V35~V36.7에서 쓰던 알림 스택은 새 '종 보관함'으로 한 번만 이관합니다.
-    if (!notificationState.bellItems.length) {
-      try {
-        const legacy = JSON.parse(localStorage.getItem(notificationState.legacyStorageKey) || '[]');
-        if (Array.isArray(legacy) && legacy.length) {
-          notificationState.bellItems = legacy;
-        }
-      } catch {}
-    }
+      localStorage.removeItem(notificationState.bellStorageKey);
+      localStorage.removeItem(notificationState.legacyStorageKey);
+    } catch {}
 
     try {
       const seen = JSON.parse(localStorage.getItem(notificationState.seenKey) || '[]');
@@ -1391,16 +1383,75 @@
   }
 
   function saveBellNotificationState() {
+    // 종 보관함은 서버 기준입니다. 이전 로컬 종 데이터만 정리합니다.
     try {
-      localStorage.setItem(
-        notificationState.bellStorageKey,
-        JSON.stringify({
-          eventId: notificationState.eventId || null,
-          items: notificationState.bellItems
-        })
-      );
+      localStorage.removeItem(notificationState.bellStorageKey);
       localStorage.removeItem(notificationState.legacyStorageKey);
     } catch {}
+  }
+
+  async function refreshBellNotificationsFromServer() {
+    syncNotificationEventScope();
+
+    if (!state.event || state.event.status === 'ended') {
+      notificationState.bellItems = [];
+      notificationState.bellDismissedIds = new Set();
+      updateNotificationBellState();
+      if ($('#notificationHistoryDialog')?.open) renderNotificationHistory();
+      return;
+    }
+
+    if (notificationState.bellSyncBusy) return;
+    notificationState.bellSyncBusy = true;
+
+    try {
+      const eventId = state.event.id;
+      const [logsResult, dismissedResult] = await Promise.all([
+        sb
+          .from('attendance_logs')
+          .select('id,participant_id,action,source,created_at,participants(name,affiliation)')
+          .eq('event_id', eventId)
+          .eq('source', 'qr')
+          .in('action', ['check_in','arrival'])
+          .order('created_at', { ascending:true })
+          .limit(1000),
+        sb
+          .from('notification_dismissals')
+          .select('log_id')
+          .eq('event_id', eventId)
+      ]);
+
+      if (logsResult.error) throw logsResult.error;
+      if (dismissedResult.error) throw dismissedResult.error;
+
+      notificationState.eventId = eventId;
+      notificationState.bellDismissedIds = new Set(
+        (dismissedResult.data || []).map(row => String(row.log_id))
+      );
+
+      const qrLogs = (logsResult.data || []).map(row => ({
+        id: row.id,
+        participantId: row.participant_id,
+        name: row.participants?.name || '참가자',
+        org: row.participants?.affiliation || '',
+        action: row.action || '',
+        source: row.source || '',
+        createdAt: row.created_at
+      }));
+
+      notificationState.bellItems = qrLogs
+        .filter(log => !notificationState.bellDismissedIds.has(String(log.id)))
+        .map(notificationItemFromLog)
+        .filter(Boolean);
+
+      markNotificationsSeen(notificationState.bellItems);
+      updateNotificationBellState();
+      if ($('#notificationHistoryDialog')?.open) renderNotificationHistory();
+    } catch (error) {
+      console.error('bell server sync error:', error);
+    } finally {
+      notificationState.bellSyncBusy = false;
+    }
   }
 
   function saveSeenNotificationIds() {
@@ -1459,9 +1510,9 @@
         notificationState.popupItems = [];
         notificationState.freshPopupId = null;
         notificationState.bellItems = [];
+        notificationState.bellDismissedIds = new Set();
         notificationState.expanded = false;
         notificationState.eventId = currentId;
-        saveBellNotificationState();
         renderNotificationCenter();
         updateNotificationBellState();
         if ($('#notificationHistoryDialog')) renderNotificationHistory();
@@ -1474,9 +1525,9 @@
       notificationState.popupItems = [];
       notificationState.freshPopupId = null;
       notificationState.bellItems = [];
+      notificationState.bellDismissedIds = new Set();
       notificationState.expanded = false;
       notificationState.eventId = currentId;
-      saveBellNotificationState();
     }
   }
 
@@ -1916,12 +1967,12 @@
   function addBellNotification(item) {
     if (!item) return;
     syncNotificationEventScope();
-    const id = item.logId || item.id;
-    if (!notificationState.bellItems.some(x => (x.logId || x.id) === id)) {
+    const id = String(item.logId || item.id || '');
+    if (!id || notificationState.bellDismissedIds.has(id)) return;
+    if (!notificationState.bellItems.some(x => String(x.logId || x.id) === id)) {
       notificationState.bellItems.push(item);
     }
     markNotificationSeen(id);
-    saveBellNotificationState();
     updateNotificationBellState();
     if ($('#notificationHistoryDialog')?.open) renderNotificationHistory();
   }
@@ -1954,34 +2005,7 @@
   }
 
   function recoverMissedQrNotifications() {
-    syncNotificationEventScope();
-    if (!state.event || state.event.status === 'ended') return;
-
-    const qrLogs = state.logs
-      .filter(isQrNotificationLog)
-      .slice()
-      .sort((a,b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
-
-    if (!notificationState.baselineReady) {
-      markNotificationsSeen(qrLogs.map(log => ({logId:log.id})));
-      saveNotificationBaseline();
-      return;
-    }
-
-    const bellIds = new Set(notificationState.bellItems.map(x => x.logId || x.id));
-    const unseen = qrLogs.filter(log =>
-      log.id && !notificationState.seenIds.includes(log.id) && !bellIds.has(log.id)
-    );
-    if (!unseen.length) return;
-
-    const items = unseen.map(notificationItemFromLog).filter(Boolean);
-    if (!items.length) return;
-
-    items.forEach(item => {
-      notificationState.bellItems.push(item);
-      markNotificationSeen(item.logId || item.id);
-    });
-    saveBellNotificationState();
+    // 놓친 종 알림은 refreshBellNotificationsFromServer()가 현재 행사 DB 기록에서 복구합니다.
     updateNotificationBellState();
     if ($('#notificationHistoryDialog')?.open) renderNotificationHistory();
   }
@@ -2025,11 +2049,8 @@
     document.body.appendChild(dialog);
 
     $('#notificationHistoryClose')?.addEventListener('click', () => dialog.close());
-    $('#notificationHistoryClear')?.addEventListener('click', () => {
-      notificationState.bellItems = [];
-      saveBellNotificationState();
-      renderNotificationHistory();
-      updateNotificationBellState();
+    $('#notificationHistoryClear')?.addEventListener('click', async () => {
+      await dismissAllBellNotifications();
     });
 
     $('#notificationHistoryList')?.addEventListener('click', e => {
@@ -2049,11 +2070,54 @@
     );
   }
 
-  function removeBellNotification(id) {
+  async function removeBellNotification(id) {
     const targetKey = String(id || '');
-    if (!targetKey) return;
-    notificationState.bellItems = notificationState.bellItems.filter(item => bellNotificationKey(item) !== targetKey);
-    saveBellNotificationState();
+    if (!targetKey || !state.event || state.event.status === 'ended') return;
+
+    const item = notificationState.bellItems.find(row => bellNotificationKey(row) === targetKey);
+    if (!item) return;
+
+    const logId = String(item.logId || item.id || '');
+    if (!logId) return;
+
+    const { error } = await sb
+      .from('notification_dismissals')
+      .insert({ log_id:logId, event_id:state.event.id });
+
+    if (error && error.code !== '23505') {
+      console.error('bell delete sync error:', error);
+      toast('알림 삭제 동기화에 실패했습니다.');
+      return;
+    }
+
+    notificationState.bellDismissedIds.add(logId);
+    notificationState.bellItems = notificationState.bellItems.filter(row => bellNotificationKey(row) !== targetKey);
+    renderNotificationHistory();
+    updateNotificationBellState();
+  }
+
+  async function dismissAllBellNotifications() {
+    if (!state.event || state.event.status === 'ended' || !notificationState.bellItems.length) return;
+
+    const rows = notificationState.bellItems
+      .map(item => String(item.logId || item.id || ''))
+      .filter(Boolean)
+      .map(logId => ({ log_id:logId, event_id:state.event.id }));
+
+    if (!rows.length) return;
+
+    const { error } = await sb
+      .from('notification_dismissals')
+      .upsert(rows, { onConflict:'log_id', ignoreDuplicates:true });
+
+    if (error) {
+      console.error('bell clear sync error:', error);
+      toast('전체 알림 삭제 동기화에 실패했습니다.');
+      return;
+    }
+
+    rows.forEach(row => notificationState.bellDismissedIds.add(String(row.log_id)));
+    notificationState.bellItems = [];
     renderNotificationHistory();
     updateNotificationBellState();
   }
@@ -2080,6 +2144,7 @@
   async function openNotificationHistory() {
     syncNotificationEventScope();
     ensureNotificationHistoryUI();
+    await refreshBellNotificationsFromServer();
     renderNotificationHistory();
     updateNotificationBellState();
     $('#notificationHistoryDialog')?.showModal();
@@ -2836,6 +2901,25 @@
           }
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event:'INSERT',
+          schema:'public',
+          table:'notification_dismissals',
+          filter:`event_id=eq.${state.event.id}`
+        },
+        (payload) => {
+          const logId = String(payload?.new?.log_id || '');
+          if (!logId) return;
+          notificationState.bellDismissedIds.add(logId);
+          notificationState.bellItems = notificationState.bellItems.filter(
+            item => String(item.logId || item.id || '') !== logId
+          );
+          renderNotificationHistory();
+          updateNotificationBellState();
+        }
+      )
       .subscribe();
   }
 
@@ -2849,6 +2933,7 @@
       await loadLatestEvent();
       await loadPeople();
       await loadAttendanceLogs();
+      await refreshBellNotificationsFromServer();
       await ensureManualEndQrValidity();
       await loadGatheringQr();
       subscribeRealtime();
