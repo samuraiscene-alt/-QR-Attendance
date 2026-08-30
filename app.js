@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.5 · notification center quiet confirm + V36.4 OCR behavior preserved
+  // QR Attendance V36.6 · notification stack actions + participant jump + unread bell center
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -1537,11 +1537,7 @@
 
     $('#attendanceNoticeClear').addEventListener('click', e => {
       e.stopPropagation();
-      markNotificationsSeen(notificationState.items);
-      notificationState.items = [];
-      notificationState.expanded = false;
-      saveNotificationState();
-      renderNotificationCenter();
+      clearAllPendingNotifications();
     });
 
     const stack = $('#attendanceNoticeStack');
@@ -1549,6 +1545,8 @@
     let tapStartX = 0;
     let tapStartY = 0;
     let tapMoved = false;
+    let stackSwipeDx = 0;
+    let stackGesture = null;
 
     stack.addEventListener('touchstart', e => {
       const t = e.touches?.[0];
@@ -1556,32 +1554,102 @@
       tapStartX = t.clientX;
       tapStartY = t.clientY;
       tapMoved = false;
+      stackSwipeDx = 0;
+      stackGesture = null;
       notificationState.scrolling = false;
     }, {passive:true});
 
     stack.addEventListener('touchmove', e => {
       const t = e.touches?.[0];
       if (!t) return;
-      if (Math.abs(t.clientX - tapStartX) > 8 || Math.abs(t.clientY - tapStartY) > 8) {
-        tapMoved = true;
-        if (notificationState.expanded) notificationState.scrolling = true;
+
+      const dx = t.clientX - tapStartX;
+      const dy = t.clientY - tapStartY;
+
+      if (!stackGesture && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) {
+        stackGesture = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical';
       }
-    }, {passive:true});
+
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) tapMoved = true;
+
+      if (notificationState.expanded) {
+        if (stackGesture === 'vertical') notificationState.scrolling = true;
+        return;
+      }
+
+      if (
+        stackGesture === 'horizontal' &&
+        dx > 0 &&
+        !notificationState.liveItem &&
+        notificationState.items.length > 0
+      ) {
+        e.preventDefault();
+        stackSwipeDx = dx;
+        stack.style.transition = 'none';
+        stack.style.transform = `translateX(${dx}px)`;
+        stack.style.opacity = String(Math.max(.18, 1 - dx / 300));
+      }
+    }, {passive:false});
 
     stack.addEventListener('touchend', () => {
+      if (
+        !notificationState.expanded &&
+        stackGesture === 'horizontal' &&
+        stackSwipeDx > 86 &&
+        !notificationState.liveItem &&
+        notificationState.items.length > 0
+      ) {
+        notificationState.moved = true;
+        stack.style.transition = 'transform .18s ease, opacity .16s ease';
+        stack.style.transform = 'translateX(120%)';
+        stack.style.opacity = '0';
+        setTimeout(() => {
+          stack.style.transition = '';
+          stack.style.transform = '';
+          stack.style.opacity = '';
+          clearAllPendingNotifications();
+          setTimeout(() => { notificationState.moved = false; }, 120);
+        }, 170);
+      } else {
+        stack.style.transition = '';
+        stack.style.transform = '';
+        stack.style.opacity = '';
+      }
+
       if (notificationState.scrolling) {
         setTimeout(() => { notificationState.scrolling = false; }, 140);
       }
+      stackGesture = null;
+      stackSwipeDx = 0;
     }, {passive:true});
 
-    stack.addEventListener('click', e => {
-      if (notificationState.dragging || notificationState.moved || notificationState.scrolling || tapMoved) return;
-      if (e.target.closest('.attendance-notice')?.dataset.justSwiped === '1') return;
-      if (notificationState.items.length <= 1) return;
+    stack.addEventListener('touchcancel', () => {
+      stack.style.transition = '';
+      stack.style.transform = '';
+      stack.style.opacity = '';
+      stackGesture = null;
+      stackSwipeDx = 0;
+      notificationState.scrolling = false;
+    }, {passive:true});
 
-      notificationState.expanded = !notificationState.expanded;
+    stack.addEventListener('click', () => {
+      if (notificationState.dragging || notificationState.moved || notificationState.scrolling || tapMoved) return;
+      if (notificationState.liveItem || notificationState.items.length === 0) return;
+      if (notificationState.expanded) return;
+
+      notificationState.expanded = true;
       renderNotificationCenter();
     });
+  }
+
+  function clearAllPendingNotifications() {
+    markNotificationsSeen(notificationState.items);
+    notificationState.items = [];
+    notificationState.expanded = false;
+    saveNotificationState();
+    renderNotificationCenter();
+    updateNotificationBellState();
+    if ($('#notificationHistoryDialog')) renderNotificationHistory();
   }
 
   function noticeStatusText(status) {
@@ -1649,7 +1717,14 @@
       </div>
     `).join('');
 
-    $$('.attendance-notice', stack).forEach(installNoticeSwipe);
+    $$('.attendance-notice', stack).forEach(card => {
+      card.addEventListener('click', e => {
+        if (showingLive || !notificationState.expanded || notificationState.scrolling) return;
+        e.stopPropagation();
+        const item = notificationState.items.find(x => x.id === card.dataset.noticeId);
+        if (item) openNotificationParticipant(item);
+      });
+    });
     applyNotificationPosition();
     updateNotificationBellState();
   }
@@ -1796,6 +1871,56 @@
     renderNotificationCenter();
   }
 
+  function resolveNotificationPerson(item) {
+    if (!item) return null;
+    return state.people.find(p => item.participantId && p.participantId === item.participantId)
+      || state.people.find(p => item.linkId && p.linkId === item.linkId)
+      || state.people.find(p => p.name === item.name && p.phone === item.phone)
+      || state.people.find(p => p.name === item.name)
+      || null;
+  }
+
+  function openNotificationParticipant(item) {
+    if (!item) return;
+
+    const person = resolveNotificationPerson(item);
+    markNotificationSeen(item.logId || item.id);
+    notificationState.items = notificationState.items.filter(x => x.id !== item.id);
+    notificationState.expanded = false;
+    saveNotificationState();
+    renderNotificationCenter();
+    updateNotificationBellState();
+    if ($('#notificationHistoryDialog')) renderNotificationHistory();
+
+    state.rosterSelectMode = false;
+    state.rosterSelectedIds = [];
+    state.filter = 'all';
+    state.search = '';
+    $$('.chip').forEach(chip => chip.classList.toggle('active', chip.dataset.filter === 'all'));
+    if ($('#searchInput')) $('#searchInput').value = '';
+
+    go('roster');
+    renderPeople();
+
+    if (!person) {
+      toast('현재 행사 명단에서 참가자를 찾을 수 없습니다.');
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      const card = $$('.person-card', $('#peopleList')).find(el =>
+        el.dataset.participantId === person.participantId || el.dataset.linkId === person.linkId
+      );
+      if (!card) {
+        toast(`${person.name} 참가자를 현재 명단에서 찾을 수 없습니다.`);
+        return;
+      }
+      card.classList.add('notification-focus');
+      card.scrollIntoView({behavior:'smooth', block:'center'});
+      setTimeout(() => card.classList.remove('notification-focus'), 2600);
+    });
+  }
+
   function isQrNotificationLog(log) {
     return Boolean(
       log &&
@@ -1814,6 +1939,8 @@
       name: person.name || log.name || '이름 없음',
       phone: person.phone || '----',
       org: person.org || log.org || '소속 없음',
+      participantId: log.participantId || person.participantId || '',
+      linkId: person.linkId || '',
       status: log.action === 'arrival' ? 'arrived' : 'present',
       createdAt: log.createdAt || new Date().toISOString()
     };
@@ -1914,7 +2041,7 @@
     dialog.innerHTML = `
       <div class="notice-history-body">
         <div class="notice-history-head">
-          <div><h2>출석 알림</h2><p>QR로 들어온 출석 · 현장도착 알림만 모아봅니다.</p></div>
+          <div><h2>출석 알림</h2><p>아직 확인하지 않은 QR 출석 · 현장도착 알림입니다.</p></div>
           <button type="button" class="notice-history-close" id="notificationHistoryClose" aria-label="닫기">×</button>
         </div>
         <div id="notificationHistoryList"></div>
@@ -1923,12 +2050,7 @@
     document.body.appendChild(dialog);
     $('#notificationHistoryClose')?.addEventListener('click', () => dialog.close());
     $('#notificationHistoryClear')?.addEventListener('click', () => {
-      markNotificationsSeen(notificationState.items);
-      notificationState.items = [];
-      saveNotificationState();
-      renderNotificationCenter();
-      updateNotificationBellState();
-      renderNotificationHistory();
+      clearAllPendingNotifications();
     });
   }
 
@@ -1936,27 +2058,23 @@
     ensureNotificationHistoryUI();
     const list = $('#notificationHistoryList');
     if (!list) return;
-    const qrLogs = state.logs.filter(isQrNotificationLog);
-    list.innerHTML = qrLogs.length ? qrLogs.map(log => `
+    const items = notificationState.items.slice().sort((a,b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    const clear = $('#notificationHistoryClear');
+    if (clear) clear.hidden = items.length === 0;
+    list.innerHTML = items.length ? items.map(item => `
       <div class="notice-history-row">
         <div class="notice-history-main">
-          <strong>${escapeHtml(log.name || '참가자')}${log.org ? ` · ${escapeHtml(log.org)}` : ''}</strong>
-          <small>${escapeHtml(formatLogDateTime(log.createdAt))}</small>
+          <strong>${escapeHtml(item.name || '참가자')}${item.org ? ` · ${escapeHtml(item.org)}` : ''}</strong>
+          <small>${escapeHtml(formatLogDateTime(item.createdAt))}</small>
         </div>
-        <span class="notice-history-type">${log.action === 'arrival' ? '현장도착' : 'QR 출석'}</span>
+        <span class="notice-history-type">${item.status === 'arrived' ? '현장도착' : 'QR 출석'}</span>
       </div>
-    `).join('') : '<div class="notice-history-empty">현재 행사에 QR 출석 알림 기록이 없습니다.</div>';
+    `).join('') : '<div class="notice-history-empty">확인하지 않은 QR 알림이 없습니다.</div>';
   }
 
   async function openNotificationHistory() {
     ensureNotificationHistoryUI();
-    await loadAttendanceLogs();
     renderNotificationHistory();
-    // 종을 직접 열어본 시점은 현재 쌓인 알림을 확인한 것으로 처리합니다.
-    markNotificationsSeen(notificationState.items);
-    notificationState.items = [];
-    saveNotificationState();
-    renderNotificationCenter();
     updateNotificationBellState();
     $('#notificationHistoryDialog')?.showModal();
   }
@@ -2132,6 +2250,7 @@
       style.textContent = `
         .roster-pick{flex:0 0 auto;width:30px;height:30px;border:2px solid #cbd7d9;border-radius:50%;background:#fff;display:grid;place-items:center;color:#fff;font-size:16px;font-weight:900;padding:0}
         .roster-pick.selected{background:#20c4b4;border-color:#20c4b4}.person-card.roster-selected{outline:2px solid rgba(32,196,180,.32);background:#fbfffe}
+        .person-card.notification-focus{outline:3px solid rgba(32,196,180,.56);box-shadow:0 0 0 7px rgba(32,196,180,.10),0 10px 28px rgba(24,96,88,.14);transition:outline-color .25s ease,box-shadow .25s ease}
         #rosterBulkBar{position:fixed;left:16px;right:16px;bottom:calc(82px + env(safe-area-inset-bottom));z-index:1200;display:grid;grid-template-columns:1fr 1.25fr .8fr;gap:8px;padding:10px;border-radius:18px;background:rgba(255,255,255,.95);border:1px solid #e0e8e9;box-shadow:0 12px 34px rgba(27,51,58,.18);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
         #rosterBulkBar[hidden]{display:none}#rosterBulkBar button{min-height:44px;border-radius:13px;border:1px solid #dfe7e8;background:#fff;font-weight:900;color:#617178}#rosterBulkDelete{background:#fff3f4!important;border-color:#ffd5d8!important;color:#d94d55!important}#rosterBulkDelete:disabled{opacity:.45}
         @media(min-width:700px){#rosterBulkBar{left:50%;right:auto;width:min(760px,calc(100% - 40px));transform:translateX(-50%)}}
@@ -2233,7 +2352,7 @@
     }
 
     list.innerHTML = rows.map(p => `
-      <div class="person-card ${selected.has(p.linkId) ? 'roster-selected' : ''}">
+      <div class="person-card ${selected.has(p.linkId) ? 'roster-selected' : ''}" data-link-id="${escapeHtml(p.linkId || '')}" data-participant-id="${escapeHtml(p.participantId || '')}">
         ${state.rosterSelectMode ? `<button type="button" class="roster-pick ${selected.has(p.linkId) ? 'selected' : ''}" data-roster-pick="${p.linkId}" aria-label="${escapeHtml(p.name)} 선택">${selected.has(p.linkId) ? '✓' : ''}</button>` : ''}
         <div class="avatar">${escapeHtml(p.name.slice(0,1))}</div>
         <div class="person-main">
