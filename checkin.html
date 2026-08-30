@@ -48,6 +48,7 @@ button:disabled{opacity:.55}.status{display:none;margin-top:20px;padding:16px;bo
   const status = document.getElementById('status');
   const pageTitle = document.getElementById('pageTitle');
   const pageLead = document.getElementById('pageLead');
+  let resetTimer = null;
 
   document.title = isArrival ? '현장 도착 확인' : '출석 확인';
   pageTitle.textContent = isArrival ? '현장 도착 확인' : '출석 확인';
@@ -60,6 +61,19 @@ button:disabled{opacity:.55}.status{display:none;margin-top:20px;padding:16px;bo
     status.textContent = message;
     status.classList.toggle('bad', bad);
     status.classList.add('show');
+  };
+
+  const resetForNextParticipant = (delay=1600) => {
+    clearTimeout(resetTimer);
+    resetTimer = setTimeout(() => {
+      form.reset();
+      form.hidden = false;
+      status.classList.remove('show', 'bad');
+      status.textContent = '';
+      button.disabled = false;
+      button.textContent = isArrival ? '도착 확인하기' : '출석하기';
+      try { nameInput.focus({ preventScroll: true }); } catch { nameInput.focus(); }
+    }, delay);
   };
 
   if (!token) {
@@ -110,24 +124,28 @@ button:disabled{opacity:.55}.status{display:none;margin-top:20px;padding:16px;bo
       if (result.ok && result.code === 'arrived') {
         form.hidden = true;
         showStatus(`${result.name || name}님, 현장 도착 처리되었습니다.`);
+        resetForNextParticipant();
         return;
       }
 
       if (result.ok && result.code === 'already_arrived') {
         form.hidden = true;
         showStatus(`${result.name || name}님은 이미 현장 도착 처리되어 있습니다.`);
+        resetForNextParticipant();
         return;
       }
 
       if (result.ok && result.code === 'checked_in') {
         form.hidden = true;
         showStatus(`${result.name || name}님, 출석 처리되었습니다.`);
+        resetForNextParticipant();
         return;
       }
 
       if (result.ok && result.code === 'already_checked_in') {
         form.hidden = true;
         showStatus(`${result.name || name}님은 이미 출석 처리되어 있습니다.`);
+        resetForNextParticipant();
         return;
       }
 
