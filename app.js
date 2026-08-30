@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.0 · proxy manager + bulk roster + OCR table + notification center + period status
+  // QR Attendance V36.1 · robust OCR preprocessing + proxy manager + bulk roster + notification center + period status
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -3232,26 +3232,157 @@
     });
   }
 
-  function makeOcrCanvas(img, angle=0) {
-    const maxSide = 1600;
-    const baseScale = Math.min(1, maxSide / Math.max(img.naturalWidth||img.width, img.naturalHeight||img.height));
-    const w = Math.max(1, Math.round((img.naturalWidth||img.width) * baseScale));
-    const h = Math.max(1, Math.round((img.naturalHeight||img.height) * baseScale));
-    const swap = Math.abs(angle)%180 === 90;
+  function makeOrientedOcrCanvas(img, angle=0, maxSide=1100) {
+    const iw = img.naturalWidth || img.width;
+    const ih = img.naturalHeight || img.height;
+    const baseScale = Math.min(1, maxSide / Math.max(iw, ih));
+    const w = Math.max(1, Math.round(iw * baseScale));
+    const h = Math.max(1, Math.round(ih * baseScale));
+    const swap = Math.abs(angle) % 180 === 90;
     const canvas = document.createElement('canvas');
-    canvas.width = swap ? h : w; canvas.height = swap ? w : h;
-    const ctx = canvas.getContext('2d', {willReadFrequently:true});
-    ctx.save(); ctx.translate(canvas.width/2,canvas.height/2); ctx.rotate(angle*Math.PI/180); ctx.drawImage(img,-w/2,-h/2,w,h); ctx.restore();
-    const data = ctx.getImageData(0,0,canvas.width,canvas.height); const px=data.data;
-    for(let i=0;i<px.length;i+=4){ const g=Math.round(px[i]*.299+px[i+1]*.587+px[i+2]*.114); const c=g<150?Math.max(0,g-25):Math.min(255,g+18); px[i]=px[i+1]=px[i+2]=c; }
-    ctx.putImageData(data,0,0); return canvas;
+    canvas.width = swap ? h : w;
+    canvas.height = swap ? w : h;
+    const ctx = canvas.getContext('2d', { willReadFrequently:true });
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate(angle * Math.PI / 180);
+    ctx.drawImage(img, -w / 2, -h / 2, w, h);
+    ctx.restore();
+    return canvas;
+  }
+
+  function ocrOtsuThreshold(gray=[]) {
+    const hist = new Array(256).fill(0);
+    gray.forEach(v => { hist[Math.max(0, Math.min(255, v|0))]++; });
+    const total = gray.length || 1;
+    let sum = 0;
+    for (let i=0;i<256;i++) sum += i * hist[i];
+    let sumB = 0, wB = 0, best = 170, bestVar = -1;
+    for (let t=0;t<256;t++) {
+      wB += hist[t];
+      if (!wB) continue;
+      const wF = total - wB;
+      if (!wF) break;
+      sumB += t * hist[t];
+      const mB = sumB / wB;
+      const mF = (sum - sumB) / wF;
+      const between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > bestVar) { bestVar = between; best = t; }
+    }
+    return Math.max(95, Math.min(220, best));
+  }
+
+  function enhanceOcrCanvas(source, mode='document') {
+    const canvas = document.createElement('canvas');
+    canvas.width = source.width;
+    canvas.height = source.height;
+    const ctx = canvas.getContext('2d', { willReadFrequently:true });
+    ctx.drawImage(source, 0, 0);
+
+    const src = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const gray = new Uint8ClampedArray(canvas.width * canvas.height);
+    for (let i=0,j=0;i<src.data.length;i+=4,j++) {
+      gray[j] = Math.round(src.data[i]*.299 + src.data[i+1]*.587 + src.data[i+2]*.114);
+    }
+
+    // 큰 블러를 조명/그림자 배경으로 보고 빼서 종이 구김·그림자 영향을 줄입니다.
+    const grayCanvas = document.createElement('canvas');
+    grayCanvas.width = canvas.width;
+    grayCanvas.height = canvas.height;
+    const gctx = grayCanvas.getContext('2d', { willReadFrequently:true });
+    const gimg = gctx.createImageData(canvas.width, canvas.height);
+    for (let j=0,i=0;j<gray.length;j++,i+=4) {
+      const v = gray[j];
+      gimg.data[i]=gimg.data[i+1]=gimg.data[i+2]=v; gimg.data[i+3]=255;
+    }
+    gctx.putImageData(gimg,0,0);
+
+    const bgCanvas = document.createElement('canvas');
+    bgCanvas.width = canvas.width;
+    bgCanvas.height = canvas.height;
+    const bctx = bgCanvas.getContext('2d', { willReadFrequently:true });
+    bctx.fillStyle='#fff'; bctx.fillRect(0,0,bgCanvas.width,bgCanvas.height);
+    bctx.filter = `blur(${Math.max(8, Math.round(Math.min(canvas.width,canvas.height)/55))}px)`;
+    bctx.drawImage(grayCanvas,0,0);
+    bctx.filter = 'none';
+    const bg = bctx.getImageData(0,0,bgCanvas.width,bgCanvas.height).data;
+
+    const normalized = new Uint8ClampedArray(gray.length);
+    for (let j=0,i=0;j<gray.length;j++,i+=4) {
+      const local = bg[i] || 230;
+      // 배경은 밝게, 배경보다 어두운 잉크는 강하게 어둡게.
+      normalized[j] = Math.max(0, Math.min(255, Math.round(238 + (gray[j]-local)*3.15)));
+    }
+
+    const out = ctx.createImageData(canvas.width, canvas.height);
+    if (mode === 'binary') {
+      const threshold = ocrOtsuThreshold(normalized);
+      for (let j=0,i=0;j<normalized.length;j++,i+=4) {
+        const v = normalized[j] < Math.min(220, threshold+8) ? 0 : 255;
+        out.data[i]=out.data[i+1]=out.data[i+2]=v; out.data[i+3]=255;
+      }
+    } else {
+      for (let j=0,i=0;j<normalized.length;j++,i+=4) {
+        let v = normalized[j];
+        // 약한 글씨는 더 진하게, 종이 바탕은 거의 흰색으로 정리합니다.
+        v = v < 205 ? Math.max(0, Math.round((v-25)*.94)) : Math.min(255, Math.round(238 + (v-205)*.7));
+        out.data[i]=out.data[i+1]=out.data[i+2]=v; out.data[i+3]=255;
+      }
+    }
+    ctx.putImageData(out,0,0);
+    return canvas;
+  }
+
+  function scaleOcrCanvas(source, maxSide=2300) {
+    const scale = Math.min(3.2, Math.max(1, maxSide / Math.max(source.width, source.height)));
+    if (scale <= 1.01) return source;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(source.width * scale));
+    canvas.height = Math.max(1, Math.round(source.height * scale));
+    const ctx = canvas.getContext('2d', { willReadFrequently:true });
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(source,0,0,canvas.width,canvas.height);
+    return canvas;
+  }
+
+  function cropOcrCanvasNormalized(source, rect) {
+    if (!rect) return source;
+    const x = Math.max(0, Math.floor(rect.x * source.width));
+    const y = Math.max(0, Math.floor(rect.y * source.height));
+    const right = Math.min(source.width, Math.ceil((rect.x + rect.w) * source.width));
+    const bottom = Math.min(source.height, Math.ceil((rect.y + rect.h) * source.height));
+    const w = Math.max(1, right-x), h = Math.max(1, bottom-y);
+    const canvas = document.createElement('canvas');
+    canvas.width=w; canvas.height=h;
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});
+    ctx.fillStyle='#fff';ctx.fillRect(0,0,w,h);
+    ctx.drawImage(source,x,y,w,h,0,0,w,h);
+    return canvas;
+  }
+
+  function rotateOcrCanvas(source, degrees=0) {
+    if (Math.abs(degrees) < .25) return source;
+    const rad=degrees*Math.PI/180;
+    const sin=Math.abs(Math.sin(rad)), cos=Math.abs(Math.cos(rad));
+    const canvas=document.createElement('canvas');
+    canvas.width=Math.ceil(source.width*cos+source.height*sin);
+    canvas.height=Math.ceil(source.width*sin+source.height*cos);
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});
+    ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.translate(canvas.width/2,canvas.height/2);ctx.rotate(rad);
+    ctx.drawImage(source,-source.width/2,-source.height/2);
+    return canvas;
   }
 
   function parseTsvWords(tsv='') {
     const lines=String(tsv||'').split('\n'); const words=[];
     for(let i=1;i<lines.length;i++){
       const cols=lines[i].split('\t'); if(cols.length<12 || cols[0]!=='5') continue;
-      const text=cleanOcrToken(cols.slice(11).join('\t')); const conf=Number(cols[10]); if(!text || conf<12) continue;
+      const text=cleanOcrToken(cols.slice(11).join('\t')); const conf=Number(cols[10]); if(!text || conf<8) continue;
       const left=Number(cols[6])||0, top=Number(cols[7])||0, width=Number(cols[8])||0, height=Number(cols[9])||0;
       words.push({text,conf,left,top,width,height,right:left+width,bottom:top+height,cx:left+width/2,cy:top+height/2});
     }
@@ -3260,7 +3391,7 @@
 
   function clusterOcrRows(words=[]) {
     if(!words.length) return [];
-    const heights=words.map(w=>w.height).filter(Boolean).sort((a,b)=>a-b); const median=heights[Math.floor(heights.length/2)]||18; const threshold=Math.max(10,median*.75);
+    const heights=words.map(w=>w.height).filter(Boolean).sort((a,b)=>a-b); const median=heights[Math.floor(heights.length/2)]||18; const threshold=Math.max(10,median*.85);
     const rows=[];
     [...words].sort((a,b)=>a.cy-b.cy||a.left-b.left).forEach(word=>{
       let row=rows.find(r=>Math.abs(r.cy-word.cy)<=threshold);
@@ -3275,32 +3406,113 @@
     return /^[가-힣]{2,6}$/.test(n) || /^[A-Za-z][A-Za-z.'-]{1,24}$/.test(n);
   }
 
+  function ocrContentRect(words=[], width=1, height=1) {
+    const usable=words.filter(w=>w.conf>=12 && w.width>1 && w.height>1);
+    if(usable.length<3) return {x:.03,y:.03,w:.94,h:.94};
+    let l=Math.min(...usable.map(w=>w.left)), t=Math.min(...usable.map(w=>w.top));
+    let r=Math.max(...usable.map(w=>w.right)), b=Math.max(...usable.map(w=>w.bottom));
+    const bw=Math.max(1,r-l), bh=Math.max(1,b-t);
+    const padX=Math.max(width*.055,bw*.18), padY=Math.max(height*.045,bh*.22);
+    l=Math.max(0,l-padX); t=Math.max(0,t-padY); r=Math.min(width,r+padX); b=Math.min(height,b+padY);
+    return {x:l/width,y:t/height,w:(r-l)/width,h:(b-t)/height};
+  }
+
+  function estimateOcrDeskew(words=[]) {
+    const slopes=[];
+    clusterOcrRows(words).forEach(row=>{
+      if(row.length<2) return;
+      const first=row[0], last=row[row.length-1];
+      const dx=last.cx-first.cx; if(Math.abs(dx)<80) return;
+      const angle=Math.atan2(last.cy-first.cy,dx)*180/Math.PI;
+      if(Number.isFinite(angle) && Math.abs(angle)<=8) slopes.push(angle);
+    });
+    if(!slopes.length) return 0;
+    slopes.sort((a,b)=>a-b);
+    return slopes[Math.floor(slopes.length/2)] || 0;
+  }
+
+  function extractPhoneAnchors(tsv='') {
+    const digitWords=parseTsvWords(tsv).map(w=>({...w,text:String(w.text).replace(/\D/g,'')})).filter(w=>w.text);
+    const anchors=[];
+    clusterOcrRows(digitWords).forEach(row=>{
+      const heights=row.map(w=>w.height).filter(Boolean).sort((a,b)=>a-b); const mh=heights[Math.floor(heights.length/2)]||20;
+      const segments=[]; let seg=[];
+      row.forEach(word=>{
+        if(!seg.length){seg=[word];return;}
+        const gap=word.left-seg[seg.length-1].right;
+        if(gap<=Math.max(18,mh*1.7)) seg.push(word); else {segments.push(seg);seg=[word];}
+      });
+      if(seg.length)segments.push(seg);
+      const candidates=[];
+      segments.forEach(words=>{
+        const digits=words.map(w=>w.text).join('');
+        if(digits.length!==4) return;
+        const left=Math.min(...words.map(w=>w.left)), top=Math.min(...words.map(w=>w.top));
+        const right=Math.max(...words.map(w=>w.right)), bottom=Math.max(...words.map(w=>w.bottom));
+        candidates.push({phone:digits,left,top,right,bottom,width:right-left,height:bottom-top,cx:(left+right)/2,cy:(top+bottom)/2,conf:words.reduce((s,w)=>s+(w.conf||0),0)/words.length});
+      });
+      if(candidates.length) anchors.push(candidates.sort((a,b)=>b.right-a.right)[0]);
+    });
+    const out=[];
+    anchors.sort((a,b)=>a.cy-b.cy).forEach(a=>{
+      if(!out.some(x=>Math.abs(x.cy-a.cy)<Math.max(10,a.height*.65) && x.phone===a.phone)) out.push(a);
+    });
+    return out;
+  }
+
+  function rowTextFromWords(words=[], anchor=null) {
+    if(!words.length) return {name:'',org:'',confidence:0};
+    let before=words.filter(w=>!looksLikeOcrHeader(w.text));
+    before=before.filter(w=>!/^\d{4}$/.test(w.text.replace(/\D/g,'')));
+    before=before.filter(w=>w.text.length<=40);
+    if(!before.length) return {name:'',org:'',confidence:0};
+
+    // 이름은 가장 왼쪽의 그럴듯한 한글/영문 단어를 우선 사용합니다.
+    let nameIndex=before.findIndex(w=>plausibleOcrName(w.text));
+    if(nameIndex<0 && before.length>=2){
+      for(let i=0;i<before.length-1;i++){
+        const joined=`${before[i].text}${before[i+1].text}`.replace(/\s/g,'');
+        if(plausibleOcrName(joined)){ before.splice(i,2,{...before[i],text:joined,right:before[i+1].right,cx:(before[i].left+before[i+1].right)/2,conf:(before[i].conf+before[i+1].conf)/2}); nameIndex=i; break; }
+      }
+    }
+    if(nameIndex<0) nameIndex=0;
+    let name=before[nameIndex]?.text||'';
+    let org=before.filter((_,i)=>i!==nameIndex).map(w=>w.text).join(' ').trim();
+    name=name.replace(/^[^가-힣A-Za-z]+|[^가-힣A-Za-z.' -]+$/g,'').trim().slice(0,30);
+    org=org.replace(/^[|｜]+|[|｜]+$/g,'').trim().slice(0,50);
+    const conf=before.reduce((s,w)=>s+(Number(w.conf)||0),0)/before.length;
+    return {name,org,confidence:conf};
+  }
+
+  function rowsFromPhoneAnchors(generalTsv='', phoneAnchors=[]) {
+    const words=parseTsvWords(generalTsv); if(!phoneAnchors.length) return [];
+    const heights=words.map(w=>w.height).filter(Boolean).sort((a,b)=>a-b); const mh=heights[Math.floor(heights.length/2)]||22;
+    const clustered=clusterOcrRows(words);
+    const result=[];
+    phoneAnchors.forEach((anchor,index)=>{
+      let rowWords=words.filter(w=>w.cx<anchor.left+4 && Math.abs(w.cy-anchor.cy)<=Math.max(mh*1.25,anchor.height*1.05));
+      if(!rowWords.length && clustered.length){
+        const nearest=clustered.map(row=>({row,dy:Math.abs((row.reduce((s,w)=>s+w.cy,0)/row.length)-anchor.cy)})).sort((a,b)=>a.dy-b.dy)[0];
+        if(nearest?.dy<=Math.max(mh*1.8,anchor.height*1.4)) rowWords=nearest.row.filter(w=>w.cx<anchor.left+4);
+      }
+      rowWords.sort((a,b)=>a.left-b.left);
+      const parsed=rowTextFromWords(rowWords,anchor);
+      const confidence=((parsed.confidence||0)+(anchor.conf||0))/2;
+      result.push({rowNumber:index+1,name:parsed.name,org:parsed.org,phone:anchor.phone,confidence,selected:Boolean(plausibleOcrName(parsed.name)&&confidence>=24),state:'bad',reason:'확인 필요'});
+    });
+    const seen=new Set();
+    return result.filter(row=>{const k=`${row.phone}|${row.name}`;if(seen.has(k))return false;seen.add(k);return true;});
+  }
+
   function tableRowsFromTsv(tsv='') {
     const rows=clusterOcrRows(parseTsvWords(tsv)); const result=[];
     rows.forEach((words,rowIndex)=>{
-      // 전화번호 4자리가 있는 행만 명단 후보로 인정해 잡음을 차단합니다.
       let phoneWord=words.find(w=>/^\d{4}$/.test(w.text.replace(/\D/g,'')));
       if(!phoneWord) return;
       const phone=phoneWord.text.replace(/\D/g,'');
-      let before=words.filter(w=>w!==phoneWord && w.cx<phoneWord.cx).filter(w=>!looksLikeOcrHeader(w.text));
-      if(!before.length) return;
-      if(before.length>=3 && /^\d{1,3}$/.test(before[0].text) && !plausibleOcrName(before[0].text)) before=before.slice(1);
-      if(!before.length) return;
-
-      // 가장 큰 가로 간격을 이름/소속 경계로 사용합니다.
-      let split=1;
-      if(before.length>1){ let bestGap=-1; for(let i=0;i<before.length-1;i++){ const gap=before[i+1].left-before[i].right; if(gap>bestGap){bestGap=gap;split=i+1;} } }
-      let name=before.slice(0,split).map(w=>w.text).join(' ').trim();
-      let org=before.slice(split).map(w=>w.text).join(' ').trim();
-      if(!plausibleOcrName(name) && before.length){
-        const idx=before.findIndex(w=>plausibleOcrName(w.text));
-        if(idx>=0){ name=before[idx].text; org=before.filter((_,i)=>i!==idx).map(w=>w.text).join(' ').trim(); }
-      }
-      name=name.replace(/^[^가-힣A-Za-z]+|[^가-힣A-Za-z.' -]+$/g,'').trim().slice(0,30);
-      org=org.replace(/^[|｜]+|[|｜]+$/g,'').trim().slice(0,50);
-      if(!name) return;
-      const avgConf=before.concat(phoneWord).reduce((sum,w)=>sum+(Number(w.conf)||0),0)/(before.length+1);
-      result.push({rowNumber:rowIndex+1,name,org,phone,confidence:avgConf,selected:true,state:'bad',reason:'확인 필요'});
+      const parsed=rowTextFromWords(words.filter(w=>w!==phoneWord && w.cx<phoneWord.cx),phoneWord);
+      if(!parsed.name) return;
+      result.push({rowNumber:rowIndex+1,name:parsed.name,org:parsed.org,phone,confidence:(parsed.confidence+(phoneWord.conf||0))/2,selected:true,state:'bad',reason:'확인 필요'});
     });
     const seen=new Set(); return result.filter(row=>{const k=`${row.name}|${row.phone}`;if(seen.has(k))return false;seen.add(k);return true;});
   }
@@ -3312,21 +3524,46 @@
       const m=line.match(/(?:^|\s)(\d{4})(?:\s|$)/); if(!m) return;
       const phone=m[1]; const left=line.replace(m[0],' ').trim(); const tokens=left.split(' ').map(cleanOcrToken).filter(Boolean); if(!tokens.length)return;
       const nameIndex=tokens.findIndex(plausibleOcrName); const idx=nameIndex>=0?nameIndex:0; const name=tokens[idx]||''; const org=tokens.filter((_,x)=>x!==idx).join(' ');
-      rows.push({rowNumber:i+1,name:name.slice(0,30),org:org.slice(0,50),phone,confidence:35,selected:true,state:'bad',reason:'확인 필요'});
+      rows.push({rowNumber:i+1,name:name.slice(0,30),org:org.slice(0,50),phone,confidence:35,selected:Boolean(plausibleOcrName(name)),state:'bad',reason:'확인 필요'});
     });
     return rows;
   }
 
   function scoreOcrRows(rows=[]) {
-    return rows.reduce((score,row)=>score+10+(plausibleOcrName(row.name)?(/^[가-힣]/.test(row.name)?10:4):0)+(row.org?2:0)+Math.min(4,(Number(row.confidence)||0)/25),0);
+    return rows.reduce((score,row)=>score+15+(plausibleOcrName(row.name)?(/^[가-힣]/.test(row.name)?12:5):0)+(row.org?2:0)+Math.min(5,(Number(row.confidence)||0)/20),0);
   }
 
-  async function recognizeOcrOrientation(worker, canvas, label, index, total) {
-    setOcrProgress(`${label} 방향 분석 ${index}/${total}`, Math.max(.08,(index-1)/total*.82));
-    const result=await worker.recognize(canvas, {}, { text:true, tsv:true });
+  function scoreOcrOrientation(words=[], text='') {
+    const four=words.filter(w=>/^\d{4}$/.test(w.text.replace(/\D/g,''))).length;
+    const near=words.filter(w=>/^\d{3,5}$/.test(w.text.replace(/\D/g,''))).length;
+    const korean=words.filter(w=>/[가-힣]{2,}/.test(w.text)).length;
+    const plausible=words.filter(w=>plausibleOcrName(w.text)).length;
+    const compact=String(text||'').replace(/\s/g,'');
+    const headers=['이름','성명','소속','전화','연락처'].filter(x=>compact.includes(x)).length;
+    return four*35+near*8+korean*5+plausible*2+headers*14+Math.min(20,words.length*.18);
+  }
+
+  async function recognizeOcrOrientation(worker, canvas, label, index, total, angle) {
+    setOcrProgress(`${label} 방향 분석 ${index}/${total}`, Math.max(.06,(index-1)/total*.48));
+    try{ await worker.setParameters({tessedit_pageseg_mode:'11',tessedit_char_whitelist:'',preserve_interword_spaces:'1',user_defined_dpi:'300'}); }catch{}
+    const result=await worker.recognize(enhanceOcrCanvas(canvas,'document'), {}, { text:true, tsv:true });
     const text=String(result?.data?.text||'').trim(); const tsv=String(result?.data?.tsv||'');
-    let rows=tableRowsFromTsv(tsv); if(!rows.length) rows=strictRowsFromText(text);
-    return {text,rows,score:scoreOcrRows(rows)};
+    const words=parseTsvWords(tsv);
+    return {angle,text,tsv,words,score:scoreOcrOrientation(words,text),width:canvas.width,height:canvas.height};
+  }
+
+  async function recognizeOcrFinal(worker, canvas, mode='document') {
+    const prepared=enhanceOcrCanvas(scaleOcrCanvas(canvas,1900),mode);
+    try{ await worker.setParameters({tessedit_pageseg_mode:'6',tessedit_char_whitelist:'',preserve_interword_spaces:'1',user_defined_dpi:'300'}); }catch{}
+    const general=await worker.recognize(prepared, {}, {text:true,tsv:true});
+
+    try{ await worker.setParameters({tessedit_pageseg_mode:'6',tessedit_char_whitelist:'0123456789',preserve_interword_spaces:'1',user_defined_dpi:'300'}); }catch{}
+    const digits=await worker.recognize(prepared, {}, {text:true,tsv:true});
+    const anchors=extractPhoneAnchors(String(digits?.data?.tsv||''));
+    let rows=rowsFromPhoneAnchors(String(general?.data?.tsv||''),anchors);
+    if(!rows.length) rows=tableRowsFromTsv(String(general?.data?.tsv||''));
+    if(!rows.length) rows=strictRowsFromText(String(general?.data?.text||''));
+    return {text:String(general?.data?.text||'').trim(),rows,anchors,score:scoreOcrRows(rows)};
   }
 
   async function handleOcrImageFile(e) {
@@ -3338,19 +3575,49 @@
     $('#ocrPreviewImage').src=imageUrl;
 
     try{
-      await ensureTesseractLoaded(); const img=await loadOcrImage(file); setOcrProgress('사진 방향 확인 중',.04);
+      await ensureTesseractLoaded();
+      const img=await loadOcrImage(file);
+      setOcrProgress('사진 방향·조명 확인 중',.03);
       const worker=await Tesseract.createWorker(['kor','eng'],1,{logger:ocrLogger});
-      try{ await worker.setParameters({tessedit_pageseg_mode:'11',preserve_interword_spaces:'1'}); }catch{}
-      const angles=[0,90,270]; const labels=['원본','오른쪽 90°','왼쪽 90°']; let best={text:'',rows:[],score:-1};
+
+      // 1단계: 축소본으로 0/90/270/180도를 비교해 카메라 방향을 자동 선택합니다.
+      const angles=[0,90,270,180], labels=['원본','오른쪽 90°','왼쪽 90°','180°'];
+      let best={score:-1,angle:0,text:'',tsv:'',words:[],width:1,height:1};
       for(let i=0;i<angles.length;i++){
-        const attempt=await recognizeOcrOrientation(worker,makeOcrCanvas(img,angles[i]),labels[i],i+1,angles.length);
+        const raw=makeOrientedOcrCanvas(img,angles[i],900);
+        const attempt=await recognizeOcrOrientation(worker,raw,labels[i],i+1,angles.length,angles[i]);
         if(attempt.score>best.score) best=attempt;
       }
-      if(best.rows.length===0){ const attempt=await recognizeOcrOrientation(worker,makeOcrCanvas(img,180),'180°',4,4); if(attempt.score>best.score)best=attempt; }
+
+      // 2단계: 방향 분석에서 찾은 글자 영역을 원본 고해상도에서 다시 잘라 크게 확대합니다.
+      setOcrProgress('명단 영역 확대·그림자 보정 중',.56);
+      const full=makeOrientedOcrCanvas(img,best.angle,2200);
+      const rect=ocrContentRect(best.words,best.width,best.height);
+      let focused=cropOcrCanvasNormalized(full,rect);
+      const skew=estimateOcrDeskew(best.words);
+      if(Math.abs(skew)>=.25) focused=rotateOcrCanvas(focused,-skew);
+
+      // 3단계: 일반 글자 OCR + 숫자 전용 OCR을 별도로 실행합니다.
+      setOcrProgress('이름·소속·전화번호 정밀 분석 중',.64);
+      let finalAttempt=await recognizeOcrFinal(worker,focused,'document');
+      if(finalAttempt.anchors.length===0 || finalAttempt.rows.length===0){
+        setOcrProgress('흐린 글자 대비 강화 재분석 중',.84);
+        const binaryAttempt=await recognizeOcrFinal(worker,focused,'binary');
+        if(binaryAttempt.score>finalAttempt.score || binaryAttempt.anchors.length>finalAttempt.anchors.length) finalAttempt=binaryAttempt;
+      }
+
       await worker.terminate();
-      state.ocrRawText=best.text; state.ocrRows=best.rows; refreshOcrRowStates(); setOcrProgress('분석 완료',1); renderOcrRows(imageUrl);
-    }catch(error){ console.error('ocr recognize error:',error); area.innerHTML+=`<div class="ocr-message">사진 글자 읽기에 실패했습니다.<br>${escapeHtml(error.message||'인터넷 연결 또는 사진 품질을 확인해주세요.')}</div>`; }
-    finally{ setTimeout(()=>URL.revokeObjectURL(imageUrl),60000); }
+      state.ocrRawText=finalAttempt.text;
+      state.ocrRows=finalAttempt.rows;
+      refreshOcrRowStates();
+      setOcrProgress('분석 완료',1);
+      renderOcrRows(imageUrl);
+    }catch(error){
+      console.error('ocr recognize error:',error);
+      area.innerHTML+=`<div class="ocr-message">사진 글자 읽기에 실패했습니다.<br>${escapeHtml(error.message||'인터넷 연결 또는 사진 품질을 확인해주세요.')}</div>`;
+    } finally{
+      setTimeout(()=>URL.revokeObjectURL(imageUrl),60000);
+    }
   }
 
   function cleanOcrToken(value='') {
@@ -3410,9 +3677,9 @@
     area.innerHTML=`
       ${oldImage?`<img class="ocr-preview-image" id="ocrPreviewImage" alt="종이 명단 미리보기" src="${escapeHtml(oldImage)}">`:''}
       <div class="ocr-summary"><div><span>등록 가능</span><b>${ok}</b></div><div><span>중복 제외</span><b>${skip}</b></div><div><span>확인 필요</span><b>${bad}</b></div></div>
-      <div class="ocr-privacy" style="margin:0 0 8px;">전화번호 4자리가 인식된 행만 후보로 표시합니다. 이름·소속을 확인하고 체크된 사람만 등록됩니다.</div>
+      <div class="ocr-privacy" style="margin:0 0 8px;">사진 방향·조명·그림자를 보정하고 전화번호는 숫자 전용 OCR로 다시 읽습니다. 그래도 불확실한 행은 자동 등록하지 않으니 이름·소속을 확인해주세요.</div>
       <div id="ocrEditableRows">
-        ${state.ocrRows.length?state.ocrRows.map((row,index)=>`<div class="ocr-row" data-ocr-index="${index}"><input type="checkbox" class="ocr-select" ${row.selected?'checked':''} aria-label="등록 선택"><input class="ocr-name" value="${escapeHtml(row.name)}" maxlength="30" placeholder="이름"><input class="ocr-org" value="${escapeHtml(row.org)}" maxlength="50" placeholder="소속"><div><input class="ocr-phone" value="${escapeHtml(row.phone)}" inputmode="numeric" maxlength="4" placeholder="뒤4자리"><div class="ocr-row-state ${row.state}">${escapeHtml(row.reason)}</div></div></div>`).join(''):'<div class="ocr-message">전화번호 4자리가 포함된 명단 행을 찾지 못했습니다. 사진을 바르게 펴서 다시 촬영하거나 아래 `+ 행 추가`로 직접 입력해주세요.</div>'}
+        ${state.ocrRows.length?state.ocrRows.map((row,index)=>`<div class="ocr-row" data-ocr-index="${index}"><input type="checkbox" class="ocr-select" ${row.selected?'checked':''} aria-label="등록 선택"><input class="ocr-name" value="${escapeHtml(row.name)}" maxlength="30" placeholder="이름"><input class="ocr-org" value="${escapeHtml(row.org)}" maxlength="50" placeholder="소속"><div><input class="ocr-phone" value="${escapeHtml(row.phone)}" inputmode="numeric" maxlength="4" placeholder="뒤4자리"><div class="ocr-row-state ${row.state}">${escapeHtml(row.reason)}</div></div></div>`).join(''):'<div class="ocr-message">전화번호 4자리를 확실하게 읽은 명단 행을 찾지 못했습니다. 자동 보정으로도 복구되지 않는 흔들림·심한 초점 흐림은 글자 정보가 사라질 수 있습니다. 조금 더 가까이 촬영하거나 아래 `+ 행 추가`로 직접 입력해주세요.</div>'}
       </div>
       <button type="button" class="ocr-add-row" id="ocrAddRow">+ 행 추가</button>
       <details class="ocr-raw-box"><summary>OCR 원문 확인</summary><textarea class="ocr-raw-text" id="ocrRawText">${escapeHtml(state.ocrRawText)}</textarea></details>`;
