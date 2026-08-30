@@ -1,6 +1,6 @@
-const CACHE='qr-attendance-v36-14-proxy-revoke-safe-20260830';
+const CACHE='qr-attendance-v36-15-proxy-share-preview-20260830';
 const ASSETS=[
-'./','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./manifest.json','./supabase-config.js',
+'./','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./proxy-share-v36-15.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'
 ];
 self.addEventListener('install',event=>{self.skipWaiting();event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)));});
