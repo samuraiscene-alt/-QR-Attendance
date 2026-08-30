@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.3 · flexible OCR for line-less / cell-less paper rosters
+  // QR Attendance V36.4 · stable OCR primary + isolated flexible-layout rescue
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -3563,7 +3563,6 @@
     return result.filter(row=>{const k=`${row.phone}|${row.name}`;if(seen.has(k))return false;seen.add(k);return true;});
   }
 
-
   function isOcrNameStopword(value='') {
     const token=String(value||'').replace(/\s+/g,'').trim();
     return new Set([
@@ -3846,29 +3845,49 @@
       }
     }
 
-    // 표의 선·칸·행이 없거나 OCR이 행 구조를 제대로 만들지 못한 경우에만
-    // Sparse Text(PSM 11)로 한 번 더 읽어 전화번호와 가까운 이름을 공간적으로 연결합니다.
-    let finalAnchors=anchors;
-    let finalText=String(general?.data?.text||'').trim();
-    const usableRows=rows.filter(row=>plausibleOcrName(row.name)&&/^\d{4}$/.test(row.phone)).length;
-    const needsLoosePass=
-      rows.length===0 ||
-      anchors.length===0 ||
-      usableRows<rows.length ||
-      (anchors.length>0 && rows.length<anchors.length);
+    return {text:String(general?.data?.text||'').trim(),rows,anchors,score:scoreOcrRows(rows)};
+  }
 
-    if(needsLoosePass){
-      try{
-        const loose=await recognizeOcrLooseLayout(worker,canvas,mode);
-        rows=mergeLooseOcrRows(rows,loose.rows);
-        if(loose.anchors.length>finalAnchors.length) finalAnchors=loose.anchors;
-        if(!finalText && loose.text) finalText=loose.text;
-      }catch(error){
-        console.warn('OCR loose-layout pass skipped:',error);
-      }
+  function countUsableOcrRows(attempt=null) {
+    return (attempt?.rows||[]).filter(row=>
+      /^\d{4}$/.test(String(row.phone||'')) && plausibleOcrName(row.name)
+    ).length;
+  }
+
+  function chooseBetterOcrAttempt(current, candidate) {
+    if(!candidate) return current;
+    const currentUsable=countUsableOcrRows(current);
+    const candidateUsable=countUsableOcrRows(candidate);
+    if(candidateUsable>currentUsable) return candidate;
+    if(candidateUsable<currentUsable) return current;
+
+    const currentPhones=(current?.anchors||[]).length;
+    const candidatePhones=(candidate?.anchors||[]).length;
+    if(candidatePhones>currentPhones) return candidate;
+    if(candidatePhones<currentPhones) return current;
+
+    return (Number(candidate?.score)||0)>(Number(current?.score)||0) ? candidate : current;
+  }
+
+  async function recognizeOcrRescue(worker, canvas, mode='document') {
+    let best=null;
+
+    // 기존 V36.2의 표/행 인식 방식을 먼저 그대로 재시도합니다.
+    try{
+      best=await recognizeOcrFinal(worker,canvas,mode);
+    }catch(error){
+      console.warn('OCR rescue structured pass skipped:',error);
     }
 
-    return {text:finalText,rows,anchors:finalAnchors,score:scoreOcrRows(rows)};
+    // 표선·행·칸이 없는 문서에서만 Sparse Text를 보조 후보로 사용합니다.
+    try{
+      const loose=await recognizeOcrLooseLayout(worker,canvas,mode);
+      best=chooseBetterOcrAttempt(best,loose);
+    }catch(error){
+      console.warn('OCR rescue loose-layout pass skipped:',error);
+    }
+
+    return best;
   }
 
   async function handleOcrImageFile(e) {
@@ -3906,9 +3925,31 @@
       setOcrProgress('이름·소속·전화번호 정밀 분석 중',.64);
       let finalAttempt=await recognizeOcrFinal(worker,focused,'document');
       if(finalAttempt.anchors.length===0 || finalAttempt.rows.length===0){
-        setOcrProgress('흐린 글자 대비 강화 재분석 중',.84);
+        setOcrProgress('흐린 글자 대비 강화 재분석 중',.82);
         const binaryAttempt=await recognizeOcrFinal(worker,focused,'binary');
-        if(binaryAttempt.score>finalAttempt.score || binaryAttempt.anchors.length>finalAttempt.anchors.length) finalAttempt=binaryAttempt;
+        finalAttempt=chooseBetterOcrAttempt(finalAttempt,binaryAttempt);
+      }
+
+      // 중요: 기존 방식이 한 명이라도 정상 인식했다면 여기서 끝냅니다.
+      // 유연 인식은 기존 결과가 0명일 때만 별도의 구조로 실행하며 기존 결과를 덮어쓰지 않습니다.
+      if(countUsableOcrRows(finalAttempt)===0){
+        setOcrProgress('표선 없는 명단 보조 분석 중',.88);
+
+        const rescueCanvases=[focused,full];
+        // 먼 거리 촬영에서 글자가 상단에 작게 모인 경우를 위한 상단 확대 후보.
+        if(full.height>full.width*.9){
+          rescueCanvases.push(cropOcrCanvasNormalized(full,{x:0,y:0,w:1,h:.72}));
+        }
+
+        let rescueBest=null;
+        for(const candidateCanvas of rescueCanvases){
+          const candidate=await recognizeOcrRescue(worker,candidateCanvas,'document');
+          rescueBest=chooseBetterOcrAttempt(rescueBest,candidate);
+          if(countUsableOcrRows(rescueBest)>=4) break;
+        }
+
+        // 보조 분석이 실제로 더 많은 정상 행을 찾았을 때만 채택합니다.
+        finalAttempt=chooseBetterOcrAttempt(finalAttempt,rescueBest);
       }
 
       await worker.terminate();
@@ -4103,7 +4144,7 @@
     area.innerHTML=`
       ${oldImage?`<img class="ocr-preview-image" id="ocrPreviewImage" alt="종이 명단 미리보기" src="${escapeHtml(oldImage)}">`:''}
       <div class="ocr-summary"><div><span>등록 가능</span><b id="ocrOkCount">${ok}</b></div><div><span>중복 제외</span><b id="ocrSkipCount">${skip}</b></div><div><span>확인 필요</span><b id="ocrBadCount">${bad}</b></div></div>
-      <div class="ocr-privacy" style="margin:0 0 8px;">사진 방향·조명·그림자를 보정하고 전화번호는 숫자 전용 OCR로 다시 읽습니다. 표의 선·칸·행이 없어도 전화번호 주변의 이름·소속을 공간적으로 연결해 인식합니다. 기존 참가자와 전화번호가 일치하면 이름·소속도 교차 확인합니다.</div>
+      <div class="ocr-privacy" style="margin:0 0 8px;">기존 표·행 인식을 우선 사용하고, 정상 행이 0명일 때만 표선 없는 명단 보조 인식을 추가로 실행합니다. 기존 참가자와 전화번호가 일치하면 이름·소속도 교차 확인합니다. 칸을 연속으로 눌러도 키보드가 내려가지 않습니다.</div>
       <div id="ocrEditableRows">
         ${state.ocrRows.length?state.ocrRows.map((row,index)=>`<div class="ocr-row" data-ocr-index="${index}"><input type="checkbox" class="ocr-select" ${row.selected?'checked':''} aria-label="등록 선택"><input class="ocr-name" value="${escapeHtml(row.name)}" maxlength="30" placeholder="이름" enterkeyhint="next" autocomplete="off"><input class="ocr-org" value="${escapeHtml(row.org)}" maxlength="50" placeholder="소속" enterkeyhint="next" autocomplete="off"><div><input class="ocr-phone" value="${escapeHtml(row.phone)}" inputmode="numeric" maxlength="4" placeholder="뒤4자리" enterkeyhint="next" autocomplete="off"><div class="ocr-row-state ${row.state}">${escapeHtml(row.reason)}</div></div></div>`).join(''):'<div class="ocr-message">전화번호 4자리를 확실하게 읽은 명단 행을 찾지 못했습니다. 자동 보정으로도 복구되지 않는 흔들림·심한 초점 흐림은 글자 정보가 사라질 수 있습니다. 조금 더 가까이 촬영하거나 아래 `+ 행 추가`로 직접 입력해주세요.</div>'}
       </div>
