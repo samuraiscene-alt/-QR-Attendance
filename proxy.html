@@ -93,6 +93,7 @@ h1{margin:0;font-size:27px;letter-spacing:-.7px}
 <script>
 (() => {
   'use strict';
+  // V36.14: 화면의 QR에도 대리 토큰 자체를 넣어, 캡처 이미지까지 폐기 상태를 따르게 합니다.
 
   const params = new URLSearchParams(location.search);
   const proxyToken = params.get('p');
@@ -115,10 +116,9 @@ h1{margin:0;font-size:27px;letter-spacing:-.7px}
     validUntil.textContent = '';
   };
 
-  const buildCheckinUrl = (token, kind) => {
+  const buildCheckinUrl = (token) => {
     const url = new URL('checkin.html', location.href);
-    url.searchParams.set('t', token);
-    if (kind === 'arrival') url.searchParams.set('mode', 'arrival');
+    url.searchParams.set('p', token);
     return url.toString();
   };
 
@@ -157,7 +157,7 @@ h1{margin:0;font-size:27px;letter-spacing:-.7px}
 
       const isArrival = result.target_kind === 'arrival';
       const label = isArrival ? '현장 도착 QR' : '집결지 출석 QR';
-      const target = buildCheckinUrl(result.target_token, result.target_kind);
+      const target = buildCheckinUrl(proxyToken);
       const imageUrl =
         'https://quickchart.io/qr?size=360&margin=2&text=' +
         encodeURIComponent(target);
@@ -180,7 +180,7 @@ h1{margin:0;font-size:27px;letter-spacing:-.7px}
           ? ''
           : `${d.toLocaleString('ko-KR')}까지 유효합니다.`;
       } else {
-        validUntil.textContent = '행사 종료 시 자동으로 만료됩니다.';
+        validUntil.textContent = '행사 종료 또는 관리자가 폐기하면 즉시 만료됩니다.';
       }
 
       status.classList.remove('show','bad');

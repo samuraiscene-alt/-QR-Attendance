@@ -36,10 +36,12 @@ button:disabled{opacity:.55}.status{display:none;margin-top:20px;padding:16px;bo
 <script>
 (() => {
   'use strict';
+  // V36.14: 대리 QR은 원본 토큰을 노출하지 않고, 제출 순간 서버에서 대리 QR 유효성을 다시 검사합니다.
   const params = new URLSearchParams(location.search);
-  const token = params.get('t');
-  const mode = params.get('mode') === 'arrival' ? 'arrival' : 'gathering';
-  const isArrival = mode === 'arrival';
+  const directToken = params.get('t');
+  const proxyToken = params.get('p');
+  let mode = params.get('mode') === 'arrival' ? 'arrival' : 'gathering';
+  let isArrival = mode === 'arrival';
 
   const form = document.getElementById('checkinForm');
   const nameInput = document.getElementById('nameInput');
@@ -49,13 +51,20 @@ button:disabled{opacity:.55}.status{display:none;margin-top:20px;padding:16px;bo
   const pageTitle = document.getElementById('pageTitle');
   const pageLead = document.getElementById('pageLead');
   let resetTimer = null;
+  let proxyCheckBusy = false;
 
-  document.title = isArrival ? '현장 도착 확인' : '출석 확인';
-  pageTitle.textContent = isArrival ? '현장 도착 확인' : '출석 확인';
-  pageLead.textContent = isArrival
-    ? '현장 도착 확인을 위해 이름과 전화번호 뒤 4자리를 입력해주세요.'
-    : '명단에 등록된 이름과 전화번호 뒤 4자리를 입력해주세요.';
-  button.textContent = isArrival ? '도착 확인하기' : '출석하기';
+  const applyMode = (nextMode) => {
+    mode = nextMode === 'arrival' ? 'arrival' : 'gathering';
+    isArrival = mode === 'arrival';
+    document.title = isArrival ? '현장 도착 확인' : '출석 확인';
+    pageTitle.textContent = isArrival ? '현장 도착 확인' : '출석 확인';
+    pageLead.textContent = isArrival
+      ? '현장 도착 확인을 위해 이름과 전화번호 뒤 4자리를 입력해주세요.'
+      : '명단에 등록된 이름과 전화번호 뒤 4자리를 입력해주세요.';
+    if (!button.disabled) button.textContent = isArrival ? '도착 확인하기' : '출석하기';
+  };
+
+  applyMode(mode);
 
   const showStatus = (message, bad=false) => {
     status.textContent = message;
@@ -63,20 +72,12 @@ button:disabled{opacity:.55}.status{display:none;margin-top:20px;padding:16px;bo
     status.classList.add('show');
   };
 
-  const resetForNextParticipant = (delay=1600) => {
-    clearTimeout(resetTimer);
-    resetTimer = setTimeout(() => {
-      form.reset();
-      form.hidden = false;
-      status.classList.remove('show', 'bad');
-      status.textContent = '';
-      button.disabled = false;
-      button.textContent = isArrival ? '도착 확인하기' : '출석하기';
-      try { nameInput.focus({ preventScroll: true }); } catch { nameInput.focus(); }
-    }, delay);
+  const hideStatus = () => {
+    status.classList.remove('show', 'bad');
+    status.textContent = '';
   };
 
-  if (!token) {
+  if (!directToken && !proxyToken) {
     form.hidden = true;
     showStatus('유효한 QR 정보가 없습니다. QR을 다시 스캔해주세요.', true);
     return;
@@ -92,9 +93,72 @@ button:disabled{opacity:.55}.status{display:none;margin-top:20px;padding:16px;bo
     auth: { persistSession:false, autoRefreshToken:false, detectSessionInUrl:false }
   });
 
+  const validateProxyForDisplay = async () => {
+    if (!proxyToken || proxyCheckBusy) return !proxyToken;
+    proxyCheckBusy = true;
+    try {
+      const { data, error } = await sb.rpc('resolve_proxy_qr', {
+        p_proxy_token: proxyToken
+      });
+      if (error) throw error;
+      const result = data || {};
+      if (!result.ok) {
+        form.hidden = true;
+        showStatus(
+          result.code === 'event_not_active'
+            ? '행사가 종료되어 이 대리 QR은 더 이상 사용할 수 없습니다.'
+            : '이 대리 QR은 폐기되었거나 사용할 수 없습니다.',
+          true
+        );
+        return false;
+      }
+      applyMode(result.target_kind);
+      form.hidden = false;
+      hideStatus();
+      return true;
+    } catch (err) {
+      console.error(err);
+      form.hidden = true;
+      showStatus('대리 QR 상태를 확인하지 못했습니다. 잠시 후 다시 열어주세요.', true);
+      return false;
+    } finally {
+      proxyCheckBusy = false;
+    }
+  };
+
+  const resetForNextParticipant = (delay=1600) => {
+    clearTimeout(resetTimer);
+    resetTimer = setTimeout(async () => {
+      form.reset();
+      if (proxyToken) {
+        const valid = await validateProxyForDisplay();
+        if (!valid) return;
+      }
+      form.hidden = false;
+      hideStatus();
+      button.disabled = false;
+      button.textContent = isArrival ? '도착 확인하기' : '출석하기';
+      try { nameInput.focus({ preventScroll: true }); } catch { nameInput.focus(); }
+    }, delay);
+  };
+
   phoneInput.addEventListener('input', () => {
     phoneInput.value = phoneInput.value.replace(/\D/g, '').slice(0, 4);
   });
+
+  if (proxyToken) {
+    form.hidden = true;
+    showStatus('대리 QR 유효 상태를 확인하고 있습니다.');
+    validateProxyForDisplay();
+
+    setInterval(() => {
+      if (document.visibilityState === 'visible') validateProxyForDisplay();
+    }, 60000);
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) validateProxyForDisplay();
+    });
+  }
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -112,12 +176,20 @@ button:disabled{opacity:.55}.status{display:none;margin-top:20px;padding:16px;bo
     status.classList.remove('show');
 
     try {
-      const { data, error } = await sb.rpc('qr_check_in', {
-        p_token: token,
-        p_name: name,
-        p_phone_last4: phone
-      });
+      const rpcName = proxyToken ? 'proxy_qr_check_in' : 'qr_check_in';
+      const rpcArgs = proxyToken
+        ? {
+            p_proxy_token: proxyToken,
+            p_name: name,
+            p_phone_last4: phone
+          }
+        : {
+            p_token: directToken,
+            p_name: name,
+            p_phone_last4: phone
+          };
 
+      const { data, error } = await sb.rpc(rpcName, rpcArgs);
       if (error) throw error;
       const result = data || {};
 
@@ -155,7 +227,12 @@ button:disabled{opacity:.55}.status{display:none;margin-top:20px;padding:16px;bo
         showStatus(`${result.name || name}님은 개인출발로 등록되어 있습니다.`, true);
       } else if (result.code === 'invalid_or_expired_qr') {
         form.hidden = true;
-        showStatus('이 QR은 만료되었거나 사용할 수 없습니다.', true);
+        showStatus(
+          proxyToken
+            ? '이 대리 QR은 폐기되었거나 사용할 수 없습니다.'
+            : '이 QR은 만료되었거나 사용할 수 없습니다.',
+          true
+        );
       } else {
         showStatus('입력 정보를 확인해주세요.', true);
       }
