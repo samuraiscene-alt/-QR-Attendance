@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v36-11-unconfirmed-time-reset-20260830';
+const CACHE='qr-attendance-v36-12-bell-delete-fix-20260830';
 const ASSETS=[
 './','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'

@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.11 · reset stale timestamps when returning to unconfirmed + V36.10 grace preserved
+  // QR Attendance V36.12 · bell individual delete identity fix + V36.11 behavior preserved
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -2040,8 +2040,19 @@
     });
   }
 
+  function bellNotificationKey(item) {
+    if (!item) return '';
+    return String(
+      item.logId ||
+      item.id ||
+      `${item.participantId || 'qr'}-${item.createdAt || ''}-${item.status || ''}`
+    );
+  }
+
   function removeBellNotification(id) {
-    notificationState.bellItems = notificationState.bellItems.filter(x => x.id !== id);
+    const targetKey = String(id || '');
+    if (!targetKey) return;
+    notificationState.bellItems = notificationState.bellItems.filter(item => bellNotificationKey(item) !== targetKey);
     saveBellNotificationState();
     renderNotificationHistory();
     updateNotificationBellState();
@@ -2061,7 +2072,7 @@
           <small>${escapeHtml(formatLogDateTime(item.createdAt))}</small>
         </div>
         <span class="notice-history-type">${item.status === 'arrived' ? '현장도착' : 'QR 출석'}</span>
-        <button type="button" class="notice-history-delete" data-bell-delete="${escapeHtml(item.id)}" aria-label="이 알림 삭제">×</button>
+        <button type="button" class="notice-history-delete" data-bell-delete="${escapeHtml(bellNotificationKey(item))}" aria-label="이 알림 삭제">×</button>
       </div>
     `).join('') : '<div class="notice-history-empty">현재 행사에 저장된 QR 알림이 없습니다.</div>';
   }
