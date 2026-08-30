@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.1 · robust OCR preprocessing + proxy manager + bulk roster + notification center + period status
+  // QR Attendance V36.2 · OCR row structure + known participant hints + continuous iPhone editing
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -3460,27 +3460,86 @@
     return out;
   }
 
-  function rowTextFromWords(words=[], anchor=null) {
-    if(!words.length) return {name:'',org:'',confidence:0};
-    let before=words.filter(w=>!looksLikeOcrHeader(w.text));
-    before=before.filter(w=>!/^\d{4}$/.test(w.text.replace(/\D/g,'')));
-    before=before.filter(w=>w.text.length<=40);
-    if(!before.length) return {name:'',org:'',confidence:0};
+  function ocrMedian(values=[], fallback=0) {
+    const list=values.map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
+    return list.length ? list[Math.floor(list.length/2)] : fallback;
+  }
 
-    // 이름은 가장 왼쪽의 그럴듯한 한글/영문 단어를 우선 사용합니다.
-    let nameIndex=before.findIndex(w=>plausibleOcrName(w.text));
-    if(nameIndex<0 && before.length>=2){
-      for(let i=0;i<before.length-1;i++){
-        const joined=`${before[i].text}${before[i+1].text}`.replace(/\s/g,'');
-        if(plausibleOcrName(joined)){ before.splice(i,2,{...before[i],text:joined,right:before[i+1].right,cx:(before[i].left+before[i+1].right)/2,conf:(before[i].conf+before[i+1].conf)/2}); nameIndex=i; break; }
+  function compactOcrNameWords(words=[]) {
+    const raw=words.map(w=>cleanOcrToken(w.text)).filter(Boolean).join(' ').trim();
+    const korean=(raw.match(/[가-힣]+/g)||[]).join('');
+    if(korean.length>=2 && korean.length<=6) return korean;
+
+    const latin=raw
+      .replace(/[^A-Za-z.' -]+/g,' ')
+      .replace(/\s+/g,' ')
+      .trim();
+    return latin.slice(0,30);
+  }
+
+  function splitOcrNameOrgWords(words=[]) {
+    const before=[...words]
+      .filter(w=>!looksLikeOcrHeader(w.text))
+      .filter(w=>!/^\d{4}$/.test(String(w.text).replace(/\D/g,'')))
+      .filter(w=>String(w.text||'').length<=40)
+      .sort((a,b)=>a.left-b.left);
+    if(!before.length) return {nameWords:[],orgWords:[]};
+    if(before.length===1) return {nameWords:before,orgWords:[]};
+
+    const mh=ocrMedian(before.map(w=>w.height),18);
+    let split=-1, largest=-Infinity;
+    for(let i=0;i<before.length-1;i++){
+      const gap=before[i+1].left-before[i].right;
+      if(gap>largest){ largest=gap; split=i+1; }
+    }
+
+    // 표의 이름/소속 칸 사이 간격은 같은 이름 안의 글자 간격보다 훨씬 큽니다.
+    // 가장 큰 가로 간격을 우선 열 경계로 사용합니다.
+    if(!(largest>=Math.max(15,mh*1.18))) split=-1;
+
+    // 소속이 숫자 한 자리처럼 명확하면 그 위치를 열 경계로 우선합니다.
+    const numericIndex=before.findIndex((w,i)=>i>0 && /^\d{1,3}$/.test(String(w.text).replace(/\D/g,'')));
+    if(numericIndex>0) split=numericIndex;
+
+    let nameWords=split>0?before.slice(0,split):before.slice(0,1);
+    let orgWords=split>0?before.slice(split):before.slice(1);
+
+    // OCR이 '신 이' / '준'처럼 한글 이름의 마지막 한 글자만 다음 칸으로 밀어낸 경우 복원합니다.
+    const leftName=compactOcrNameWords(nameWords);
+    const rightKorean=(orgWords.map(w=>w.text).join('').match(/[가-힣]+/g)||[]).join('');
+    const combined=`${leftName}${rightKorean}`;
+    const orgHasDigits=orgWords.some(w=>/\d/.test(String(w.text)));
+    if(!orgHasDigits && rightKorean.length===1 && /^[가-힣]{2,4}$/.test(combined)) {
+      nameWords=[...nameWords,...orgWords];
+      orgWords=[];
+    }
+
+    // 첫 그룹이 한 글자뿐이고 다음 그룹까지 합치면 정상 이름이 되는 경우도 합칩니다.
+    const nowName=compactOcrNameWords(nameWords);
+    if(nowName.length<2 && orgWords.length){
+      const firstOrg=orgWords[0];
+      const merged=compactOcrNameWords([...nameWords,firstOrg]);
+      if(plausibleOcrName(merged) && !/^\d+$/.test(String(firstOrg.text).replace(/\D/g,''))){
+        nameWords=[...nameWords,firstOrg];
+        orgWords=orgWords.slice(1);
       }
     }
-    if(nameIndex<0) nameIndex=0;
-    let name=before[nameIndex]?.text||'';
-    let org=before.filter((_,i)=>i!==nameIndex).map(w=>w.text).join(' ').trim();
+
+    return {nameWords,orgWords};
+  }
+
+  function rowTextFromWords(words=[], anchor=null) {
+    if(!words.length) return {name:'',org:'',confidence:0};
+    const {nameWords,orgWords}=splitOcrNameOrgWords(words);
+    if(!nameWords.length) return {name:'',org:'',confidence:0};
+
+    let name=compactOcrNameWords(nameWords);
+    let org=orgWords.map(w=>cleanOcrToken(w.text)).filter(Boolean).join(' ').trim();
+
     name=name.replace(/^[^가-힣A-Za-z]+|[^가-힣A-Za-z.' -]+$/g,'').trim().slice(0,30);
     org=org.replace(/^[|｜]+|[|｜]+$/g,'').trim().slice(0,50);
-    const conf=before.reduce((s,w)=>s+(Number(w.conf)||0),0)/before.length;
+    const used=[...nameWords,...orgWords];
+    const conf=used.length?used.reduce((sum,w)=>sum+(Number(w.conf)||0),0)/used.length:0;
     return {name,org,confidence:conf};
   }
 
@@ -3533,6 +3592,36 @@
     return rows.reduce((score,row)=>score+15+(plausibleOcrName(row.name)?(/^[가-힣]/.test(row.name)?12:5):0)+(row.org?2:0)+Math.min(5,(Number(row.confidence)||0)/20),0);
   }
 
+
+  function mergeOcrRowCandidates(primaryRows=[], alternateRows=[]) {
+    if(!alternateRows.length) return primaryRows;
+    const byPhone=new Map();
+    alternateRows.forEach(row=>{
+      if(!byPhone.has(row.phone)) byPhone.set(row.phone,[]);
+      byPhone.get(row.phone).push(row);
+    });
+
+    return primaryRows.map(primary=>{
+      const options=byPhone.get(primary.phone)||[];
+      if(!options.length) return primary;
+      const alternate=options.sort((a,b)=>(Number(b.confidence)||0)-(Number(a.confidence)||0))[0];
+      const out={...primary};
+      const pName=ocrComparableName(primary.name), aName=ocrComparableName(alternate.name);
+
+      if(!plausibleOcrName(primary.name) && plausibleOcrName(alternate.name)) out.name=alternate.name;
+      else if(plausibleOcrName(primary.name) && plausibleOcrName(alternate.name) && pName!==aName){
+        if((aName.startsWith(pName)||pName.startsWith(aName)) && aName.length>pName.length && aName.length<=6) out.name=alternate.name;
+        else if((Number(alternate.confidence)||0)>(Number(primary.confidence)||0)+7) out.name=alternate.name;
+      }
+
+      const pOrg=String(primary.org||'').trim(), aOrg=String(alternate.org||'').trim();
+      if(!pOrg && aOrg) out.org=aOrg;
+      else if(!/^\d{1,4}$/.test(pOrg.replace(/\D/g,'')) && /^\d{1,4}$/.test(aOrg.replace(/\D/g,''))) out.org=aOrg;
+      out.confidence=Math.max(Number(primary.confidence)||0,Number(alternate.confidence)||0);
+      return out;
+    });
+  }
+
   function scoreOcrOrientation(words=[], text='') {
     const four=words.filter(w=>/^\d{4}$/.test(w.text.replace(/\D/g,''))).length;
     const near=words.filter(w=>/^\d{3,5}$/.test(w.text.replace(/\D/g,''))).length;
@@ -3553,7 +3642,8 @@
   }
 
   async function recognizeOcrFinal(worker, canvas, mode='document') {
-    const prepared=enhanceOcrCanvas(scaleOcrCanvas(canvas,1900),mode);
+    const scaled=scaleOcrCanvas(canvas,1900);
+    const prepared=enhanceOcrCanvas(scaled,mode);
     try{ await worker.setParameters({tessedit_pageseg_mode:'6',tessedit_char_whitelist:'',preserve_interword_spaces:'1',user_defined_dpi:'300'}); }catch{}
     const general=await worker.recognize(prepared, {}, {text:true,tsv:true});
 
@@ -3563,6 +3653,20 @@
     let rows=rowsFromPhoneAnchors(String(general?.data?.tsv||''),anchors);
     if(!rows.length) rows=tableRowsFromTsv(String(general?.data?.tsv||''));
     if(!rows.length) rows=strictRowsFromText(String(general?.data?.text||''));
+
+    // 같은 사진을 명암 이진화 방식으로 한 번 더 읽어 한글 이름/소속 후보를 교차 비교합니다.
+    if(mode==='document' && anchors.length){
+      try{
+        const binaryPrepared=enhanceOcrCanvas(scaled,'binary');
+        await worker.setParameters({tessedit_pageseg_mode:'6',tessedit_char_whitelist:'',preserve_interword_spaces:'1',user_defined_dpi:'300'});
+        const alternate=await worker.recognize(binaryPrepared, {}, {text:true,tsv:true});
+        const alternateRows=rowsFromPhoneAnchors(String(alternate?.data?.tsv||''),anchors);
+        rows=mergeOcrRowCandidates(rows,alternateRows);
+      }catch(error){
+        console.warn('OCR alternate name pass skipped:',error);
+      }
+    }
+
     return {text:String(general?.data?.text||'').trim(),rows,anchors,score:scoreOcrRows(rows)};
   }
 
@@ -3609,6 +3713,8 @@
       await worker.terminate();
       state.ocrRawText=finalAttempt.text;
       state.ocrRows=finalAttempt.rows;
+      setOcrProgress('기존 명단과 전화번호 대조 중',.96);
+      await applyKnownParticipantHints(state.ocrRows);
       refreshOcrRowStates();
       setOcrProgress('분석 완료',1);
       renderOcrRows(imageUrl);
@@ -3630,6 +3736,87 @@
 
   function parseOcrRosterText(text='') {
     state.ocrRows=strictRowsFromText(text); refreshOcrRowStates(); return state.ocrRows;
+  }
+
+
+  function ocrComparableName(value='') {
+    return String(value||'').toLowerCase().replace(/[^가-힣a-z]/g,'');
+  }
+
+  function ocrEditDistance(a='',b='') {
+    const x=[...ocrComparableName(a)], y=[...ocrComparableName(b)];
+    if(!x.length) return y.length;
+    if(!y.length) return x.length;
+    const prev=Array.from({length:y.length+1},(_,i)=>i);
+    for(let i=1;i<=x.length;i++){
+      let last=prev[0]; prev[0]=i;
+      for(let j=1;j<=y.length;j++){
+        const old=prev[j];
+        prev[j]=Math.min(prev[j]+1,prev[j-1]+1,last+(x[i-1]===y[j-1]?0:1));
+        last=old;
+      }
+    }
+    return prev[y.length];
+  }
+
+  function scoreKnownParticipantMatch(row, participant) {
+    const scanned=ocrComparableName(row?.name);
+    const known=ocrComparableName(participant?.name);
+    if(!known) return -1;
+    if(!scanned) return 58;
+    if(scanned===known) return 120;
+    if((known.startsWith(scanned)||scanned.startsWith(known)) && Math.abs(known.length-scanned.length)<=1) return 102;
+    const dist=ocrEditDistance(scanned,known);
+    if(dist===1) return 96;
+    if(dist===2 && Math.max(scanned.length,known.length)>=4) return 72;
+    return -1;
+  }
+
+  async function applyKnownParticipantHints(rows=[]) {
+    if(!sb || !state.member?.organization_id || !rows.length) return;
+    const phones=[...new Set(rows.map(r=>normalizeImportPhone(r.phone||'')).filter(p=>/^\d{4}$/.test(p)))];
+    if(!phones.length) return;
+
+    const known=[];
+    for(let i=0;i<phones.length;i+=80){
+      const batch=phones.slice(i,i+80);
+      const {data,error}=await sb
+        .from('participants')
+        .select('id,name,affiliation,phone_last4')
+        .eq('organization_id',state.member.organization_id)
+        .in('phone_last4',batch)
+        .limit(1000);
+      if(error){ console.warn('OCR participant hint load error:',error); return; }
+      known.push(...(data||[]));
+    }
+
+    const byPhone=new Map();
+    known.forEach(p=>{
+      const key=normalizeImportPhone(p.phone_last4||'');
+      if(!byPhone.has(key)) byPhone.set(key,[]);
+      byPhone.get(key).push(p);
+    });
+
+    rows.forEach(row=>{
+      const matches=byPhone.get(normalizeImportPhone(row.phone||''))||[];
+      if(!matches.length) return;
+      const ranked=matches
+        .map(p=>({p,score:scoreKnownParticipantMatch(row,p)}))
+        .filter(x=>x.score>=0)
+        .sort((a,b)=>b.score-a.score);
+      const best=ranked[0];
+      if(!best) return;
+      const second=ranked[1];
+      const safe=best.score>=90 && (!second || best.score-second.score>=12);
+      if(!safe) return;
+
+      if(row.name && row.name!==best.p.name) row.ocrOriginalName=row.name;
+      row.name=String(best.p.name||row.name||'').trim();
+      if(best.p.affiliation!==null && best.p.affiliation!==undefined && String(best.p.affiliation).trim()) {
+        row.org=String(best.p.affiliation).trim();
+      }
+      row.knownMatch=true;
+    });
   }
 
   function refreshOcrRowStates() {
@@ -3662,10 +3849,48 @@
         row.reason = '사진 내 중복';
       } else {
         row.state = 'ok';
-        row.reason = '등록 가능';
+        row.reason = row.knownMatch ? '기존 명단 일치' : '등록 가능';
         scannedKeys.add(key);
       }
     });
+  }
+
+  function updateOcrEditorState(area=$('#ocrWorkArea'), importButton=$('#ocrImportButton')) {
+    if(!area||!importButton) return;
+    refreshOcrRowStates();
+
+    const ok=state.ocrRows.filter(r=>r.state==='ok').length;
+    const skip=state.ocrRows.filter(r=>r.state==='skip').length;
+    const bad=state.ocrRows.filter(r=>r.state==='bad').length;
+    const selectedOk=state.ocrRows.filter(r=>r.state==='ok'&&r.selected).length;
+
+    const okEl=$('#ocrOkCount',area), skipEl=$('#ocrSkipCount',area), badEl=$('#ocrBadCount',area);
+    if(okEl) okEl.textContent=String(ok);
+    if(skipEl) skipEl.textContent=String(skip);
+    if(badEl) badEl.textContent=String(bad);
+
+    $$('.ocr-row',area).forEach(rowEl=>{
+      const index=Number(rowEl.dataset.ocrIndex);
+      const row=state.ocrRows[index]; if(!row)return;
+      const stateEl=$('.ocr-row-state',rowEl);
+      if(stateEl){
+        stateEl.className=`ocr-row-state ${row.state}`;
+        stateEl.textContent=row.reason;
+      }
+    });
+
+    importButton.hidden=selectedOk===0;
+    importButton.textContent=`선택한 ${selectedOk}명 불러오기`;
+  }
+
+  function focusNextOcrEditorInput(current, area=$('#ocrWorkArea')) {
+    if(!current||!area)return;
+    const inputs=$$('.ocr-row .ocr-name, .ocr-row .ocr-org, .ocr-row .ocr-phone',area).filter(el=>!el.disabled);
+    const index=inputs.indexOf(current);
+    if(index<0)return;
+    const next=inputs[index+1];
+    if(next){ next.focus({preventScroll:true}); try{next.select?.();}catch{} }
+    else current.blur();
   }
 
   function renderOcrRows(imageUrl='') {
@@ -3676,22 +3901,56 @@
     const oldImage=$('#ocrPreviewImage')?.src||imageUrl;
     area.innerHTML=`
       ${oldImage?`<img class="ocr-preview-image" id="ocrPreviewImage" alt="종이 명단 미리보기" src="${escapeHtml(oldImage)}">`:''}
-      <div class="ocr-summary"><div><span>등록 가능</span><b>${ok}</b></div><div><span>중복 제외</span><b>${skip}</b></div><div><span>확인 필요</span><b>${bad}</b></div></div>
-      <div class="ocr-privacy" style="margin:0 0 8px;">사진 방향·조명·그림자를 보정하고 전화번호는 숫자 전용 OCR로 다시 읽습니다. 그래도 불확실한 행은 자동 등록하지 않으니 이름·소속을 확인해주세요.</div>
+      <div class="ocr-summary"><div><span>등록 가능</span><b id="ocrOkCount">${ok}</b></div><div><span>중복 제외</span><b id="ocrSkipCount">${skip}</b></div><div><span>확인 필요</span><b id="ocrBadCount">${bad}</b></div></div>
+      <div class="ocr-privacy" style="margin:0 0 8px;">사진 방향·조명·그림자를 보정하고 전화번호는 숫자 전용 OCR로 다시 읽습니다. 기존 참가자와 전화번호가 일치하면 이름·소속도 교차 확인합니다. 칸을 연속으로 눌러도 키보드가 내려가지 않습니다.</div>
       <div id="ocrEditableRows">
-        ${state.ocrRows.length?state.ocrRows.map((row,index)=>`<div class="ocr-row" data-ocr-index="${index}"><input type="checkbox" class="ocr-select" ${row.selected?'checked':''} aria-label="등록 선택"><input class="ocr-name" value="${escapeHtml(row.name)}" maxlength="30" placeholder="이름"><input class="ocr-org" value="${escapeHtml(row.org)}" maxlength="50" placeholder="소속"><div><input class="ocr-phone" value="${escapeHtml(row.phone)}" inputmode="numeric" maxlength="4" placeholder="뒤4자리"><div class="ocr-row-state ${row.state}">${escapeHtml(row.reason)}</div></div></div>`).join(''):'<div class="ocr-message">전화번호 4자리를 확실하게 읽은 명단 행을 찾지 못했습니다. 자동 보정으로도 복구되지 않는 흔들림·심한 초점 흐림은 글자 정보가 사라질 수 있습니다. 조금 더 가까이 촬영하거나 아래 `+ 행 추가`로 직접 입력해주세요.</div>'}
+        ${state.ocrRows.length?state.ocrRows.map((row,index)=>`<div class="ocr-row" data-ocr-index="${index}"><input type="checkbox" class="ocr-select" ${row.selected?'checked':''} aria-label="등록 선택"><input class="ocr-name" value="${escapeHtml(row.name)}" maxlength="30" placeholder="이름" enterkeyhint="next" autocomplete="off"><input class="ocr-org" value="${escapeHtml(row.org)}" maxlength="50" placeholder="소속" enterkeyhint="next" autocomplete="off"><div><input class="ocr-phone" value="${escapeHtml(row.phone)}" inputmode="numeric" maxlength="4" placeholder="뒤4자리" enterkeyhint="next" autocomplete="off"><div class="ocr-row-state ${row.state}">${escapeHtml(row.reason)}</div></div></div>`).join(''):'<div class="ocr-message">전화번호 4자리를 확실하게 읽은 명단 행을 찾지 못했습니다. 자동 보정으로도 복구되지 않는 흔들림·심한 초점 흐림은 글자 정보가 사라질 수 있습니다. 조금 더 가까이 촬영하거나 아래 `+ 행 추가`로 직접 입력해주세요.</div>'}
       </div>
       <button type="button" class="ocr-add-row" id="ocrAddRow">+ 행 추가</button>
       <details class="ocr-raw-box"><summary>OCR 원문 확인</summary><textarea class="ocr-raw-text" id="ocrRawText">${escapeHtml(state.ocrRawText)}</textarea></details>`;
 
     $$('.ocr-row',area).forEach(rowEl=>{
-      const index=Number(rowEl.dataset.ocrIndex); const name=$('.ocr-name',rowEl), org=$('.ocr-org',rowEl), phone=$('.ocr-phone',rowEl), pick=$('.ocr-select',rowEl);
-      pick?.addEventListener('change',()=>{const row=state.ocrRows[index];if(row)row.selected=pick.checked;renderOcrRows($('#ocrPreviewImage')?.src||oldImage);});
-      [name,org,phone].forEach(input=>input?.addEventListener('change',()=>{const row=state.ocrRows[index];if(!row)return;row.name=name?.value||'';row.org=org?.value||'';row.phone=phone?.value||'';renderOcrRows($('#ocrPreviewImage')?.src||oldImage);}));
+      const index=Number(rowEl.dataset.ocrIndex);
+      const name=$('.ocr-name',rowEl), org=$('.ocr-org',rowEl), phone=$('.ocr-phone',rowEl), pick=$('.ocr-select',rowEl);
+      const row=state.ocrRows[index]; if(!row)return;
+
+      pick?.addEventListener('change',()=>{
+        row.selected=pick.checked;
+        updateOcrEditorState(area,importButton);
+      });
+
+      const sync=()=>{
+        row.name=name?.value||'';
+        row.org=org?.value||'';
+        if(phone){
+          const digits=String(phone.value||'').replace(/\D/g,'').slice(0,4);
+          if(phone.value!==digits) phone.value=digits;
+          row.phone=digits;
+        }
+        row.knownMatch=false;
+        updateOcrEditorState(area,importButton);
+      };
+
+      [name,org,phone].forEach(input=>{
+        input?.addEventListener('input',sync);
+        input?.addEventListener('keydown',e=>{
+          if(e.key==='Enter'){
+            e.preventDefault();
+            sync();
+            focusNextOcrEditorInput(input,area);
+          }
+        });
+      });
     });
-    $('#ocrAddRow')?.addEventListener('click',()=>{state.ocrRows.push({rowNumber:state.ocrRows.length+1,name:'',org:'',phone:'',selected:true,state:'bad',reason:'이름 확인'});renderOcrRows($('#ocrPreviewImage')?.src||oldImage);requestAnimationFrame(()=>$$('.ocr-row',area).at(-1)?.querySelector('.ocr-name')?.focus());});
+
+    $('#ocrAddRow')?.addEventListener('click',()=>{
+      state.ocrRows.push({rowNumber:state.ocrRows.length+1,name:'',org:'',phone:'',selected:true,state:'bad',reason:'이름 확인'});
+      renderOcrRows($('#ocrPreviewImage')?.src||oldImage);
+      requestAnimationFrame(()=>$$('.ocr-row',area).at(-1)?.querySelector('.ocr-name')?.focus());
+    });
     $('#ocrRawText')?.addEventListener('change',e=>{state.ocrRawText=e.target.value||'';});
-    importButton.hidden=selectedOk===0; importButton.textContent=`선택한 ${selectedOk}명 불러오기`;
+    importButton.hidden=selectedOk===0;
+    importButton.textContent=`선택한 ${selectedOk}명 불러오기`;
   }
 
   async function importOcrRows() {
