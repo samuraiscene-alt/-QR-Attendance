@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.10 · 3-second manual status edit grace + V36.9 popup/bell behavior preserved
+  // QR Attendance V36.11 · reset stale timestamps when returning to unconfirmed + V36.10 grace preserved
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -2682,6 +2682,7 @@
             travel_mode:'bus',
             attendance_status:'unconfirmed',
             checked_at:null,
+            arrived_at:null,
             check_source:'manual'
           };
 
