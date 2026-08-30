@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.6 · notification stack actions + participant jump + unread bell center
+  // QR Attendance V36.9 · persistent live popup stack + bell archive split + manual status confirmation
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -1139,6 +1139,15 @@
     state.arrivalQrToken = null;
     state.qrView = 'gathering';
     state.awaitingNewEvent = false;
+    clearPopupTimer();
+    notificationState.popupItems = [];
+    notificationState.bellItems = [];
+    notificationState.expanded = false;
+    notificationState.eventId = state.event.id;
+    saveBellNotificationState();
+    renderNotificationCenter();
+    updateNotificationBellState();
+    if ($('#notificationHistoryDialog')) renderNotificationHistory();
     renderAll();
 
     const archivedToSheets = await archiveGoogleSheetsEvent(false);
@@ -1309,17 +1318,20 @@
   }
 
   const notificationState = {
-    items: [],
-    liveItem: null,
-    liveTimer: null,
+    popupItems: [],
+    bellItems: [],
+    popupTimer: null,
+    freshPopupId: null,
     seenIds: [],
     baselineReady: false,
+    eventId: null,
     expanded: false,
     y: null,
     dragging: false,
     moved: false,
     scrolling: false,
-    storageKey: 'qr-attendance-notification-stack-v35',
+    bellStorageKey: 'qr-attendance-bell-v36-8',
+    legacyStorageKey: 'qr-attendance-notification-stack-v35',
     seenKey: 'qr-attendance-notification-seen-v35',
     baselineKey: 'qr-attendance-notification-baseline-v35',
     positionKey: 'qr-attendance-notification-position-v21'
@@ -1330,16 +1342,36 @@
   }
 
   function loadNotificationState() {
+    notificationState.popupItems = [];
+    notificationState.freshPopupId = null;
+    notificationState.expanded = false;
+
     try {
-      const saved = JSON.parse(localStorage.getItem(notificationState.storageKey) || '[]');
-      notificationState.items = Array.isArray(saved) ? saved.slice(-30) : [];
+      const saved = JSON.parse(localStorage.getItem(notificationState.bellStorageKey) || 'null');
+      if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+        notificationState.eventId = saved.eventId || null;
+        notificationState.bellItems = Array.isArray(saved.items) ? saved.items : [];
+      } else {
+        notificationState.bellItems = [];
+      }
     } catch {
-      notificationState.items = [];
+      notificationState.bellItems = [];
+      notificationState.eventId = null;
+    }
+
+    // V35~V36.7에서 쓰던 알림 스택은 새 '종 보관함'으로 한 번만 이관합니다.
+    if (!notificationState.bellItems.length) {
+      try {
+        const legacy = JSON.parse(localStorage.getItem(notificationState.legacyStorageKey) || '[]');
+        if (Array.isArray(legacy) && legacy.length) {
+          notificationState.bellItems = legacy;
+        }
+      } catch {}
     }
 
     try {
       const seen = JSON.parse(localStorage.getItem(notificationState.seenKey) || '[]');
-      notificationState.seenIds = Array.isArray(seen) ? seen.slice(-250) : [];
+      notificationState.seenIds = Array.isArray(seen) ? seen.slice(-5000) : [];
     } catch {
       notificationState.seenIds = [];
     }
@@ -1358,12 +1390,16 @@
     }
   }
 
-  function saveNotificationState() {
+  function saveBellNotificationState() {
     try {
       localStorage.setItem(
-        notificationState.storageKey,
-        JSON.stringify(notificationState.items.slice(-30))
+        notificationState.bellStorageKey,
+        JSON.stringify({
+          eventId: notificationState.eventId || null,
+          items: notificationState.bellItems
+        })
       );
+      localStorage.removeItem(notificationState.legacyStorageKey);
     } catch {}
   }
 
@@ -1371,7 +1407,7 @@
     try {
       localStorage.setItem(
         notificationState.seenKey,
-        JSON.stringify(notificationState.seenIds.slice(-250))
+        JSON.stringify(notificationState.seenIds.slice(-5000))
       );
     } catch {}
   }
@@ -1379,7 +1415,7 @@
   function markNotificationSeen(id) {
     if (!id || notificationState.seenIds.includes(id)) return;
     notificationState.seenIds.push(id);
-    notificationState.seenIds = notificationState.seenIds.slice(-250);
+    notificationState.seenIds = notificationState.seenIds.slice(-5000);
     saveSeenNotificationIds();
   }
 
@@ -1393,6 +1429,55 @@
         localStorage.setItem(notificationState.positionKey, String(notificationState.y));
       }
     } catch {}
+  }
+
+  function clearPopupTimer() {
+    clearTimeout(notificationState.popupTimer);
+    notificationState.popupTimer = null;
+  }
+
+  function schedulePopupEmphasisEnd() {
+    clearPopupTimer();
+    if (!notificationState.freshPopupId || !notificationState.popupItems.length) return;
+    const highlightedId = notificationState.freshPopupId;
+    notificationState.popupTimer = setTimeout(() => {
+      if (notificationState.freshPopupId === highlightedId) {
+        notificationState.freshPopupId = null;
+        renderNotificationCenter();
+      }
+      notificationState.popupTimer = null;
+    }, 3000);
+  }
+
+  function syncNotificationEventScope() {
+    const currentId = state.event?.id || null;
+    const ended = state.event?.status === 'ended';
+
+    if (!currentId || ended) {
+      if (notificationState.popupItems.length || notificationState.bellItems.length || notificationState.eventId) {
+        clearPopupTimer();
+        notificationState.popupItems = [];
+        notificationState.freshPopupId = null;
+        notificationState.bellItems = [];
+        notificationState.expanded = false;
+        notificationState.eventId = currentId;
+        saveBellNotificationState();
+        renderNotificationCenter();
+        updateNotificationBellState();
+        if ($('#notificationHistoryDialog')) renderNotificationHistory();
+      }
+      return;
+    }
+
+    if (notificationState.eventId !== currentId) {
+      clearPopupTimer();
+      notificationState.popupItems = [];
+      notificationState.freshPopupId = null;
+      notificationState.bellItems = [];
+      notificationState.expanded = false;
+      notificationState.eventId = currentId;
+      saveBellNotificationState();
+    }
   }
 
   function ensureNotificationCenter() {
@@ -1412,110 +1497,52 @@
       }
       #attendanceNoticeCenter.is-empty{display:none}
       #attendanceNoticeCenter.dragging{transition:none}
-      #attendanceNoticeStack{
-        position:relative;
-        width:100%;
-        pointer-events:auto;
-      }
-      #attendanceNoticeStack.collapsed{
-        height:82px;
-        overflow:visible;
-      }
+      #attendanceNoticeStack{position:relative;width:100%;pointer-events:auto}
+      #attendanceNoticeStack.collapsed{height:82px;overflow:visible}
       #attendanceNoticeStack.expanded{
-        display:flex;
-        flex-direction:column;
-        gap:10px;
-        max-height:min(68dvh,620px);
-        overflow-y:auto;
-        -webkit-overflow-scrolling:touch;
-        overscroll-behavior:contain;
-        scroll-behavior:smooth;
-        padding:4px 0 8px;
-        touch-action:pan-y;
+        display:flex;flex-direction:column;gap:10px;
+        max-height:min(68dvh,620px);overflow-y:auto;
+        -webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+        scroll-behavior:smooth;padding:4px 0 8px;touch-action:pan-y;
       }
       .attendance-notice{
-        position:relative;
-        box-sizing:border-box;
-        width:100%;
-        min-height:72px;
-        border-radius:22px;
-        background:rgba(232,232,237,.88);
+        position:relative;box-sizing:border-box;width:100%;min-height:72px;
+        border-radius:22px;background:rgba(232,232,237,.88);
         border:1px solid rgba(255,255,255,.78);
         box-shadow:0 10px 28px rgba(28,34,40,.18);
         backdrop-filter:blur(24px) saturate(1.18);
         -webkit-backdrop-filter:blur(24px) saturate(1.18);
-        display:flex;
-        align-items:center;
-        padding:0 58px 0 18px;
-        color:#12181f;
-        font-size:15px;
-        font-weight:800;
-        letter-spacing:-.25px;
-        user-select:none;
-        -webkit-user-select:none;
-        touch-action:pan-y;
-        overflow:hidden;
+        display:flex;align-items:center;padding:0 58px 0 18px;
+        color:#12181f;font-size:15px;font-weight:800;letter-spacing:-.25px;
+        user-select:none;-webkit-user-select:none;touch-action:pan-y;overflow:hidden;
         transition:transform .2s ease,opacity .18s ease;
       }
-      .attendance-notice-line{
-        white-space:nowrap;
-        overflow:hidden;
-        text-overflow:ellipsis;
-        width:100%;
-      }
+      .attendance-notice-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%}
       .attendance-notice .notice-status{color:#0b9184;font-weight:900}
       .attendance-notice[data-status="individual"] .notice-status{color:#7348c7}
       .attendance-notice[data-status="unknown"] .notice-status{color:#d4444b}
-
-      #attendanceNoticeStack.collapsed .attendance-notice{
-        position:absolute;
-        left:0;
-        top:0;
-      }
-      #attendanceNoticeStack.collapsed .attendance-notice:not(:last-child) .attendance-notice-line{
-        opacity:0;
-      }
-      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(1){
-        z-index:6;transform:translateY(0) scale(1);opacity:1;
-      }
-      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(2){
-        z-index:5;transform:translateY(-9px) scale(.965);opacity:.90;
-      }
-      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(3){
-        z-index:4;transform:translateY(-17px) scale(.93);opacity:.72;
-      }
-      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(n+4){
-        opacity:0;transform:translateY(-23px) scale(.91);pointer-events:none;
-      }
-
-      #attendanceNoticeStack.expanded .attendance-notice{
-        position:relative;
-        flex:0 0 auto;
-        transform:none;
-        opacity:1;
-      }
-
+      #attendanceNoticeStack.collapsed .attendance-notice{position:absolute;left:0;top:0}
+      #attendanceNoticeStack.collapsed .attendance-notice:not(:last-child) .attendance-notice-line{opacity:0}
+      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(1){z-index:6;transform:translateY(0) scale(1);opacity:1}
+      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(2){z-index:5;transform:translateY(-9px) scale(.965);opacity:.90}
+      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(3){z-index:4;transform:translateY(-17px) scale(.93);opacity:.72}
+      #attendanceNoticeStack.collapsed .attendance-notice:nth-last-child(n+4){opacity:0;transform:translateY(-23px) scale(.91);pointer-events:none}
+      #attendanceNoticeStack.expanded .attendance-notice{position:relative;flex:0 0 auto;transform:none;opacity:1}
       #attendanceNoticeClear{
-        position:absolute;
-        right:10px;
-        top:17px;
-        width:40px;
-        height:40px;
-        border:0;
-        border-radius:50%;
-        background:rgba(120,120,128,.22);
-        color:#444a50;
-        font-size:24px;
-        line-height:1;
-        display:grid;
-        place-items:center;
-        z-index:30;
-        pointer-events:auto;
-        backdrop-filter:blur(12px);
-        -webkit-backdrop-filter:blur(12px);
+        position:absolute;right:10px;top:17px;width:40px;height:40px;border:0;border-radius:50%;
+        background:rgba(120,120,128,.22);color:#444a50;font-size:24px;line-height:1;
+        display:grid;place-items:center;z-index:30;pointer-events:auto;
+        backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+      }
+      .attendance-notice.is-fresh{
+        box-shadow:0 12px 34px rgba(28,34,40,.28),0 0 0 3px rgba(32,185,170,.16);
+        animation:attendanceNoticeFresh 1s ease-in-out 3;
+      }
+      @keyframes attendanceNoticeFresh{
+        0%,100%{filter:brightness(1)}
+        50%{filter:brightness(1.07)}
       }
       .attendance-notice.swiping{transition:none!important}
-
       @media(max-width:390px){
         #attendanceNoticeCenter{left:12px;right:12px}
         .attendance-notice{font-size:14px;padding-left:15px;padding-right:56px}
@@ -1528,8 +1555,8 @@
     center.id = 'attendanceNoticeCenter';
     center.className = 'is-empty';
     center.innerHTML = `
-      <div id="attendanceNoticeStack" class="collapsed" aria-label="출석 알림"></div>
-      <button id="attendanceNoticeClear" type="button" aria-label="알림 전체 삭제">×</button>
+      <div id="attendanceNoticeStack" class="collapsed" aria-label="실시간 출석 알림"></div>
+      <button id="attendanceNoticeClear" type="button" aria-label="실시간 팝업 전체 삭제">×</button>
     `;
     document.body.appendChild(center);
 
@@ -1537,11 +1564,10 @@
 
     $('#attendanceNoticeClear').addEventListener('click', e => {
       e.stopPropagation();
-      clearAllPendingNotifications();
+      clearAllPopupNotifications();
     });
 
     const stack = $('#attendanceNoticeStack');
-
     let tapStartX = 0;
     let tapStartY = 0;
     let tapMoved = false;
@@ -1562,14 +1588,12 @@
     stack.addEventListener('touchmove', e => {
       const t = e.touches?.[0];
       if (!t) return;
-
       const dx = t.clientX - tapStartX;
       const dy = t.clientY - tapStartY;
 
       if (!stackGesture && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) {
         stackGesture = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical';
       }
-
       if (Math.abs(dx) > 8 || Math.abs(dy) > 8) tapMoved = true;
 
       if (notificationState.expanded) {
@@ -1577,12 +1601,7 @@
         return;
       }
 
-      if (
-        stackGesture === 'horizontal' &&
-        dx > 0 &&
-        !notificationState.liveItem &&
-        notificationState.items.length > 0
-      ) {
+      if (stackGesture === 'horizontal' && dx > 0 && notificationState.popupItems.length > 0) {
         e.preventDefault();
         stackSwipeDx = dx;
         stack.style.transition = 'none';
@@ -1596,8 +1615,7 @@
         !notificationState.expanded &&
         stackGesture === 'horizontal' &&
         stackSwipeDx > 86 &&
-        !notificationState.liveItem &&
-        notificationState.items.length > 0
+        notificationState.popupItems.length > 0
       ) {
         notificationState.moved = true;
         stack.style.transition = 'transform .18s ease, opacity .16s ease';
@@ -1607,7 +1625,7 @@
           stack.style.transition = '';
           stack.style.transform = '';
           stack.style.opacity = '';
-          clearAllPendingNotifications();
+          clearAllPopupNotifications();
           setTimeout(() => { notificationState.moved = false; }, 120);
         }, 170);
       } else {
@@ -1634,31 +1652,23 @@
 
     stack.addEventListener('click', () => {
       if (notificationState.dragging || notificationState.moved || notificationState.scrolling || tapMoved) return;
-      if (notificationState.liveItem || notificationState.items.length === 0) return;
-      if (notificationState.expanded) return;
-
+      if (notificationState.popupItems.length === 0 || notificationState.expanded) return;
+      clearPopupTimer();
       notificationState.expanded = true;
       renderNotificationCenter();
     });
   }
 
-  function clearAllPendingNotifications() {
-    markNotificationsSeen(notificationState.items);
-    notificationState.items = [];
+  function clearAllPopupNotifications() {
+    clearPopupTimer();
+    notificationState.popupItems = [];
+    notificationState.freshPopupId = null;
     notificationState.expanded = false;
-    saveNotificationState();
     renderNotificationCenter();
-    updateNotificationBellState();
-    if ($('#notificationHistoryDialog')) renderNotificationHistory();
   }
 
   function noticeStatusText(status) {
-    return ({
-      present:'출석✓',
-      arrived:'현장도착✓',
-      individual:'개인출발',
-      unknown:'미확인'
-    })[status] || '미확인';
+    return ({present:'출석✓',arrived:'현장도착✓',individual:'개인출발',unknown:'미확인'})[status] || '미확인';
   }
 
   function clampNotificationY(y, center) {
@@ -1676,13 +1686,8 @@
 
   function applyNotificationPosition() {
     const center = $('#attendanceNoticeCenter');
-    const hasNotice = Boolean(notificationState.liveItem) || notificationState.items.length > 0;
-    if (!center || !hasNotice) return;
-
-    if (!Number.isFinite(notificationState.y)) {
-      notificationState.y = defaultNotificationY();
-    }
-
+    if (!center || !notificationState.popupItems.length) return;
+    if (!Number.isFinite(notificationState.y)) notificationState.y = defaultNotificationY();
     requestAnimationFrame(() => {
       notificationState.y = clampNotificationY(notificationState.y, center);
       center.style.top = `${notificationState.y}px`;
@@ -1691,23 +1696,18 @@
 
   function renderNotificationCenter() {
     ensureNotificationCenter();
-
     const center = $('#attendanceNoticeCenter');
     const stack = $('#attendanceNoticeStack');
     const clear = $('#attendanceNoticeClear');
     if (!center || !stack) return;
 
-    const showingLive = Boolean(notificationState.liveItem);
-    const items = showingLive ? [notificationState.liveItem] : notificationState.items;
+    const items = notificationState.popupItems;
     center.classList.toggle('is-empty', items.length === 0);
-    center.classList.toggle('live-only', showingLive);
-    stack.className = !showingLive && notificationState.expanded ? 'expanded' : 'collapsed';
-    if (clear) clear.style.display = showingLive || items.length === 0 ? 'none' : 'grid';
+    stack.className = notificationState.expanded ? 'expanded' : 'collapsed';
+    if (clear) clear.style.display = items.length === 0 ? 'none' : 'grid';
 
     stack.innerHTML = items.map(item => `
-      <div class="attendance-notice"
-           data-notice-id="${escapeHtml(item.id)}"
-           data-status="${escapeHtml(item.status)}">
+      <div class="attendance-notice ${item.id === notificationState.freshPopupId ? 'is-fresh' : ''}" data-notice-id="${escapeHtml(item.id)}" data-status="${escapeHtml(item.status)}">
         <div class="attendance-notice-line">
           ${escapeHtml(item.name || '이름 없음')}
           <span> · ${escapeHtml(item.phone || '----')}</span>
@@ -1718,15 +1718,16 @@
     `).join('');
 
     $$('.attendance-notice', stack).forEach(card => {
+      if (notificationState.expanded) installNoticeSwipe(card);
       card.addEventListener('click', e => {
-        if (showingLive || !notificationState.expanded || notificationState.scrolling) return;
+        if (!notificationState.expanded || notificationState.scrolling || card.dataset.justSwiped === '1') return;
         e.stopPropagation();
-        const item = notificationState.items.find(x => x.id === card.dataset.noticeId);
-        if (item) openNotificationParticipant(item);
+        const item = notificationState.popupItems.find(x => x.id === card.dataset.noticeId);
+        if (item) openPopupNotificationParticipant(item);
       });
     });
+
     applyNotificationPosition();
-    updateNotificationBellState();
   }
 
   function installNotificationCenterDrag(center) {
@@ -1739,10 +1740,8 @@
     center.addEventListener('touchstart', e => {
       if (notificationState.expanded) return;
       if (e.target.closest('#attendanceNoticeClear')) return;
-
       const t = e.touches?.[0];
       if (!t) return;
-
       startX = t.clientX;
       startY = t.clientY;
       const rect = center.getBoundingClientRect();
@@ -1757,22 +1756,17 @@
       if (notificationState.expanded) return;
       const t = e.touches?.[0];
       if (!t) return;
-
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
-
       if (!mode && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
         mode = Math.abs(dy) > Math.abs(dx) ? 'drag-y' : 'swipe-x';
       }
-
       if (mode !== 'drag-y') return;
-
       e.preventDefault();
       moved = true;
       notificationState.dragging = true;
       notificationState.moved = true;
       center.classList.add('dragging');
-
       notificationState.y = clampNotificationY(startCenterY + dy, center);
       center.style.top = `${notificationState.y}px`;
     }, {passive:false});
@@ -1784,12 +1778,7 @@
       }
       notificationState.dragging = false;
       mode = null;
-
-      if (moved) {
-        setTimeout(() => {
-          notificationState.moved = false;
-        }, 160);
-      }
+      if (moved) setTimeout(() => { notificationState.moved = false; }, 160);
     };
 
     center.addEventListener('touchend', finish, {passive:true});
@@ -1815,19 +1804,14 @@
     card.addEventListener('touchmove', e => {
       const t = e.touches?.[0];
       if (!t) return;
-
       const rawDx = t.clientX - startX;
       const rawDy = t.clientY - startY;
-
       if (!mode && (Math.abs(rawDx) > 6 || Math.abs(rawDy) > 6)) {
         mode = Math.abs(rawDx) > Math.abs(rawDy) ? 'horizontal' : 'vertical';
       }
-
       if (mode !== 'horizontal') return;
-
       dx = Math.max(0, rawDx);
       if (dx <= 0) return;
-
       e.preventDefault();
       card.classList.add('swiping');
       card.style.transform = `translateX(${dx}px)`;
@@ -1836,38 +1820,26 @@
 
     card.addEventListener('touchend', () => {
       card.classList.remove('swiping');
-
       if (mode === 'horizontal' && dx > 86) {
         card.dataset.justSwiped = '1';
         const id = card.dataset.noticeId;
         card.style.transform = 'translateX(120%)';
         card.style.opacity = '0';
-        setTimeout(() => removeNotification(id), 160);
+        setTimeout(() => removePopupNotification(id), 160);
       } else {
         card.style.transform = '';
         card.style.opacity = '';
         setTimeout(() => { card.dataset.justSwiped = '0'; }, 100);
       }
-
       mode = null;
       dx = 0;
     }, {passive:true});
   }
 
-  function removeNotification(id) {
-    if (notificationState.liveItem?.id === id) {
-      clearTimeout(notificationState.liveTimer);
-      notificationState.liveTimer = null;
-      notificationState.liveItem = null;
-      renderNotificationCenter();
-      return;
-    }
-
-    const removed = notificationState.items.find(x => x.id === id);
-    if (removed) markNotificationSeen(removed.logId || removed.id);
-    notificationState.items = notificationState.items.filter(x => x.id !== id);
-    if (notificationState.items.length <= 1) notificationState.expanded = false;
-    saveNotificationState();
+  function removePopupNotification(id) {
+    notificationState.popupItems = notificationState.popupItems.filter(x => x.id !== id);
+    if (notificationState.freshPopupId === id) notificationState.freshPopupId = null;
+    if (notificationState.popupItems.length <= 1) notificationState.expanded = false;
     renderNotificationCenter();
   }
 
@@ -1880,17 +1852,9 @@
       || null;
   }
 
-  function openNotificationParticipant(item) {
+  function navigateToNotificationParticipant(item) {
     if (!item) return;
-
     const person = resolveNotificationPerson(item);
-    markNotificationSeen(item.logId || item.id);
-    notificationState.items = notificationState.items.filter(x => x.id !== item.id);
-    notificationState.expanded = false;
-    saveNotificationState();
-    renderNotificationCenter();
-    updateNotificationBellState();
-    if ($('#notificationHistoryDialog')) renderNotificationHistory();
 
     state.rosterSelectMode = false;
     state.rosterSelectedIds = [];
@@ -1921,12 +1885,14 @@
     });
   }
 
+  function openPopupNotificationParticipant(item) {
+    if (!item) return;
+    removePopupNotification(item.id);
+    navigateToNotificationParticipant(item);
+  }
+
   function isQrNotificationLog(log) {
-    return Boolean(
-      log &&
-      log.source === 'qr' &&
-      (log.action === 'check_in' || log.action === 'arrival')
-    );
+    return Boolean(log && log.source === 'qr' && (log.action === 'check_in' || log.action === 'arrival'));
   }
 
   function notificationItemFromLog(log) {
@@ -1936,6 +1902,7 @@
     return {
       id,
       logId: log.id || id,
+      eventId: state.event?.id || '',
       name: person.name || log.name || '이름 없음',
       phone: person.phone || '----',
       org: person.org || log.org || '소속 없음',
@@ -1946,25 +1913,37 @@
     };
   }
 
+  function addBellNotification(item) {
+    if (!item) return;
+    syncNotificationEventScope();
+    const id = item.logId || item.id;
+    if (!notificationState.bellItems.some(x => (x.logId || x.id) === id)) {
+      notificationState.bellItems.push(item);
+    }
+    markNotificationSeen(id);
+    saveBellNotificationState();
+    updateNotificationBellState();
+    if ($('#notificationHistoryDialog')?.open) renderNotificationHistory();
+  }
+
   function showLiveQrNotification(item) {
     if (!item) return;
+    syncNotificationEventScope();
+    addBellNotification(item);
+
     const toggle = $('#popupToggle');
-    markNotificationSeen(item.logId || item.id);
     if (toggle && !toggle.checked) return;
 
-    ensureNotificationCenter();
-    clearTimeout(notificationState.liveTimer);
-    notificationState.liveItem = item;
-    notificationState.expanded = false;
+    const id = item.logId || item.id;
+    if (!notificationState.popupItems.some(x => (x.logId || x.id) === id)) {
+      notificationState.popupItems.push(item);
+      notificationState.popupItems = notificationState.popupItems.slice(-30);
+    }
+    notificationState.freshPopupId = item.id;
     notificationState.y = defaultNotificationY();
     saveNotificationPosition();
     renderNotificationCenter();
-
-    notificationState.liveTimer = setTimeout(() => {
-      notificationState.liveItem = null;
-      notificationState.liveTimer = null;
-      renderNotificationCenter();
-    }, 3000);
+    schedulePopupEmphasisEnd();
   }
 
   function saveNotificationBaseline() {
@@ -1975,6 +1954,9 @@
   }
 
   function recoverMissedQrNotifications() {
+    syncNotificationEventScope();
+    if (!state.event || state.event.status === 'ended') return;
+
     const qrLogs = state.logs
       .filter(isQrNotificationLog)
       .slice()
@@ -1986,36 +1968,28 @@
       return;
     }
 
-    const toggle = $('#popupToggle');
-    const pendingIds = new Set(notificationState.items.map(x => x.logId || x.id));
+    const bellIds = new Set(notificationState.bellItems.map(x => x.logId || x.id));
     const unseen = qrLogs.filter(log =>
-      log.id &&
-      !notificationState.seenIds.includes(log.id) &&
-      !pendingIds.has(log.id)
+      log.id && !notificationState.seenIds.includes(log.id) && !bellIds.has(log.id)
     );
-
     if (!unseen.length) return;
-
-    if (toggle && !toggle.checked) {
-      unseen.forEach(log => markNotificationSeen(log.id));
-      return;
-    }
 
     const items = unseen.map(notificationItemFromLog).filter(Boolean);
     if (!items.length) return;
 
-    notificationState.items = [...notificationState.items, ...items].slice(-30);
-    notificationState.expanded = false;
-    notificationState.y = defaultNotificationY();
-    saveNotificationPosition();
-    saveNotificationState();
-    renderNotificationCenter();
+    items.forEach(item => {
+      notificationState.bellItems.push(item);
+      markNotificationSeen(item.logId || item.id);
+    });
+    saveBellNotificationState();
+    updateNotificationBellState();
+    if ($('#notificationHistoryDialog')?.open) renderNotificationHistory();
   }
 
   function updateNotificationBellState() {
     const dot = $('#notificationButton .notice-dot');
     if (!dot) return;
-    dot.hidden = notificationState.items.length === 0;
+    dot.hidden = notificationState.bellItems.length === 0;
   }
 
   function ensureNotificationHistoryUI() {
@@ -2028,11 +2002,12 @@
       .notice-history-body{box-sizing:border-box;padding:22px 18px 20px;max-height:84dvh;overflow-y:auto;-webkit-overflow-scrolling:touch}
       .notice-history-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}.notice-history-head h2{font-size:22px;margin:0 0 4px}.notice-history-head p{margin:0;color:#7f8a90;font-size:12px;line-height:1.45}
       .notice-history-close{border:0;background:#f1f3f4;width:38px;height:38px;border-radius:50%;font-size:23px;color:#596267;flex:0 0 auto}
-      .notice-history-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 2px;border-top:1px solid #edf1f2}.notice-history-row:first-child{border-top:0}
-      .notice-history-main{min-width:0}.notice-history-main strong{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.notice-history-main small{display:block;color:#7d898f;font-size:11px;margin-top:4px}
+      .notice-history-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 2px;border-top:1px solid #edf1f2}.notice-history-row:first-child{border-top:0}
+      .notice-history-main{min-width:0;flex:1}.notice-history-main strong{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.notice-history-main small{display:block;color:#7d898f;font-size:11px;margin-top:4px}
       .notice-history-type{flex:0 0 auto;border-radius:999px;padding:7px 9px;background:#e8faf6;color:#159f93;font-size:10px;font-weight:900}
+      .notice-history-delete{flex:0 0 auto;width:34px;height:34px;border:0;border-radius:50%;background:#f1f3f4;color:#6b7479;font-size:20px;line-height:1}
       .notice-history-empty{padding:26px 8px;text-align:center;color:#879399;font-size:13px}
-      .notice-history-clear{width:100%;height:44px;border:1px solid #dce8e8;background:#f8fbfb;color:#607178;border-radius:13px;font-weight:850;margin-top:12px}
+      .notice-history-clear{width:100%;height:44px;border:1px solid #ffd6d9;background:#fff6f6;color:#d94d55;border-radius:13px;font-weight:850;margin-top:12px}
     `;
     document.head.appendChild(style);
 
@@ -2041,24 +2016,42 @@
     dialog.innerHTML = `
       <div class="notice-history-body">
         <div class="notice-history-head">
-          <div><h2>출석 알림</h2><p>아직 확인하지 않은 QR 출석 · 현장도착 알림입니다.</p></div>
+          <div><h2>출석 알림</h2><p>현재 행사에서 QR로 발생한 변화를 관리자가 삭제할 때까지 보관합니다.</p></div>
           <button type="button" class="notice-history-close" id="notificationHistoryClose" aria-label="닫기">×</button>
         </div>
         <div id="notificationHistoryList"></div>
-        <button type="button" class="notice-history-clear" id="notificationHistoryClear">모두 확인</button>
+        <button type="button" class="notice-history-clear" id="notificationHistoryClear">전체 삭제</button>
       </div>`;
     document.body.appendChild(dialog);
+
     $('#notificationHistoryClose')?.addEventListener('click', () => dialog.close());
     $('#notificationHistoryClear')?.addEventListener('click', () => {
-      clearAllPendingNotifications();
+      notificationState.bellItems = [];
+      saveBellNotificationState();
+      renderNotificationHistory();
+      updateNotificationBellState();
     });
+
+    $('#notificationHistoryList')?.addEventListener('click', e => {
+      const button = e.target.closest('[data-bell-delete]');
+      if (!button) return;
+      e.stopPropagation();
+      removeBellNotification(button.dataset.bellDelete);
+    });
+  }
+
+  function removeBellNotification(id) {
+    notificationState.bellItems = notificationState.bellItems.filter(x => x.id !== id);
+    saveBellNotificationState();
+    renderNotificationHistory();
+    updateNotificationBellState();
   }
 
   function renderNotificationHistory() {
     ensureNotificationHistoryUI();
     const list = $('#notificationHistoryList');
     if (!list) return;
-    const items = notificationState.items.slice().sort((a,b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    const items = notificationState.bellItems.slice().sort((a,b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
     const clear = $('#notificationHistoryClear');
     if (clear) clear.hidden = items.length === 0;
     list.innerHTML = items.length ? items.map(item => `
@@ -2068,11 +2061,13 @@
           <small>${escapeHtml(formatLogDateTime(item.createdAt))}</small>
         </div>
         <span class="notice-history-type">${item.status === 'arrived' ? '현장도착' : 'QR 출석'}</span>
+        <button type="button" class="notice-history-delete" data-bell-delete="${escapeHtml(item.id)}" aria-label="이 알림 삭제">×</button>
       </div>
-    `).join('') : '<div class="notice-history-empty">확인하지 않은 QR 알림이 없습니다.</div>';
+    `).join('') : '<div class="notice-history-empty">현재 행사에 저장된 QR 알림이 없습니다.</div>';
   }
 
   async function openNotificationHistory() {
+    syncNotificationEventScope();
     ensureNotificationHistoryUI();
     renderNotificationHistory();
     updateNotificationBellState();
@@ -2590,6 +2585,48 @@
     return labelFor(person?.status);
   }
 
+  function ensureManualStatusConfirmUI() {
+    if ($('#manualStatusConfirmDialog')) return;
+
+    const dialog = document.createElement('dialog');
+    dialog.id = 'manualStatusConfirmDialog';
+    dialog.style.cssText = 'width:min(calc(100% - 40px),360px);border:0;border-radius:24px;padding:0;background:#fff;box-shadow:0 22px 70px rgba(20,39,45,.24);';
+    dialog.innerHTML = `
+      <div style="padding:24px 20px 18px;text-align:center;">
+        <strong style="display:block;font-size:20px;margin-bottom:8px;">상태를 변경하시겠습니까?</strong>
+        <p style="margin:0;color:#7d898f;font-size:13px;line-height:1.5;">QR 자동 체크가 아닌 관리자 수동 변경입니다.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:22px;">
+          <button type="button" id="manualStatusCancel" style="height:48px;border:0;border-radius:14px;background:#f1f3f4;color:#5e686d;font-size:16px;font-weight:850;">취소</button>
+          <button type="button" id="manualStatusApply" style="height:48px;border:0;border-radius:14px;background:#20b9aa;color:#fff;font-size:16px;font-weight:900;">변경</button>
+        </div>
+      </div>`;
+    document.body.appendChild(dialog);
+  }
+
+  function confirmManualStatusChange() {
+    ensureManualStatusConfirmUI();
+    const dialog = $('#manualStatusConfirmDialog');
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = value => {
+        if (settled) return;
+        settled = true;
+        $('#manualStatusCancel')?.removeEventListener('click', onCancel);
+        $('#manualStatusApply')?.removeEventListener('click', onApply);
+        dialog?.removeEventListener('cancel', onDialogCancel);
+        if (dialog?.open) dialog.close();
+        resolve(value);
+      };
+      const onCancel = () => finish(false);
+      const onApply = () => finish(true);
+      const onDialogCancel = e => { e.preventDefault(); finish(false); };
+      $('#manualStatusCancel')?.addEventListener('click', onCancel, {once:true});
+      $('#manualStatusApply')?.addEventListener('click', onApply, {once:true});
+      dialog?.addEventListener('cancel', onDialogCancel, {once:true});
+      dialog?.showModal();
+    });
+  }
+
   async function cycleStatus(linkId) {
     const p = state.people.find(x => x.linkId === linkId);
     if (!p || !state.event) return;
@@ -2597,6 +2634,9 @@
       toast('종료된 행사는 출석 상태를 변경할 수 없습니다.');
       return;
     }
+
+    const approved = await confirmManualStatusChange();
+    if (!approved) return;
 
     const next =
       p.status === 'unknown' ? 'present' :
@@ -5661,9 +5701,11 @@
       if (document.visibilityState === 'visible') {
         refreshAfterAppResume();
       } else {
-        clearTimeout(notificationState.liveTimer);
-        notificationState.liveTimer = null;
-        notificationState.liveItem = null;
+        // 팝업은 화면에서만 쓰는 실시간 알림이므로 앱이 가려지면 비웁니다.
+        // 종 보관함은 그대로 유지되며, 놓친 QR 변화는 복귀 시 recoverMissedQrNotifications()가 채웁니다.
+        clearPopupTimer();
+        notificationState.popupItems = [];
+        notificationState.expanded = false;
         renderNotificationCenter();
       }
     });
