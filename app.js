@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.2 · OCR row structure + known participant hints + continuous iPhone editing
+  // QR Attendance V36.3 · flexible OCR for line-less / cell-less paper rosters
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -3563,6 +3563,185 @@
     return result.filter(row=>{const k=`${row.phone}|${row.name}`;if(seen.has(k))return false;seen.add(k);return true;});
   }
 
+
+  function isOcrNameStopword(value='') {
+    const token=String(value||'').replace(/\s+/g,'').trim();
+    return new Set([
+      '이름','성명','소속','기관','부서','전화','전화번호','연락처','휴대폰','핸드폰','번호',
+      '명단','참가자','참석자','출석','비고','서명','직책','직위','팀','조'
+    ]).has(token);
+  }
+
+  function looseRowsFromPhoneAnchors(generalTsv='', phoneAnchors=[]) {
+    const words=parseTsvWords(generalTsv);
+    if(!phoneAnchors.length || !words.length) return [];
+
+    const heights=words.map(w=>w.height).filter(Boolean);
+    const mh=ocrMedian(heights,22);
+    const usable=words.filter(w=>{
+      const t=cleanOcrToken(w.text);
+      if(!t || looksLikeOcrHeader(t) || isOcrNameStopword(t)) return false;
+      if(/^\d{4}$/.test(String(t).replace(/\D/g,''))) return false;
+      return true;
+    });
+
+    const usedNameWords=new Set();
+    const result=[];
+
+    phoneAnchors.slice().sort((a,b)=>a.cy-b.cy).forEach((anchor,index)=>{
+      const yTol=Math.max(34,mh*2.45,anchor.height*2.15);
+      const leftLimit=anchor.left+Math.max(28,anchor.width*.75);
+
+      let near=usable.filter(w=>
+        w.cx < leftLimit &&
+        Math.abs(w.cy-anchor.cy) <= yTol
+      );
+
+      // 표 선이나 행 경계가 없어 OCR이 줄을 나누지 못했을 때,
+      // 전화번호 주변에서 가장 가까운 이름 후보를 찾아 같은 사람으로 묶습니다.
+      const plausibleNear=near.filter(w=>
+        plausibleOcrName(cleanOcrToken(w.text)) &&
+        !usedNameWords.has(w)
+      );
+
+      let seed=plausibleNear
+        .map(w=>({
+          word:w,
+          score:Math.abs(w.cy-anchor.cy)*2 + Math.max(0,anchor.left-w.right)*.06
+        }))
+        .sort((a,b)=>a.score-b.score)[0]?.word || null;
+
+      if(!seed){
+        seed=usable
+          .filter(w=>
+            !usedNameWords.has(w) &&
+            plausibleOcrName(cleanOcrToken(w.text)) &&
+            w.cx < anchor.cx + Math.max(35,anchor.width)
+          )
+          .map(w=>({
+            word:w,
+            dy:Math.abs(w.cy-anchor.cy),
+            dx:Math.abs(anchor.left-w.right)
+          }))
+          .filter(x=>x.dy<=Math.max(90,mh*4.2,anchor.height*4))
+          .sort((a,b)=>(a.dy*2+a.dx*.08)-(b.dy*2+b.dx*.08))[0]?.word || null;
+      }
+
+      if(seed){
+        const seedTol=Math.max(24,mh*1.55,seed.height*1.5);
+        const rowCy=seed.cy;
+        const seedBand=usable.filter(w=>
+          w.cx < leftLimit &&
+          Math.abs(w.cy-rowCy)<=seedTol
+        );
+        if(seedBand.length) near=seedBand;
+      }
+
+      near=near
+        .filter(w=>!usedNameWords.has(w) || w===seed)
+        .sort((a,b)=>a.left-b.left);
+
+      let parsed=rowTextFromWords(near,anchor);
+
+      // 행 구분이 없는 문서에서 이름이 한 단어만 또렷하게 잡힌 경우를 보강합니다.
+      if(!plausibleOcrName(parsed.name) && seed){
+        parsed={
+          ...parsed,
+          name:cleanOcrToken(seed.text).replace(/[^가-힣A-Za-z.' -]/g,'').trim().slice(0,30),
+          confidence:Math.max(Number(parsed.confidence)||0,Number(seed.conf)||0)
+        };
+      }
+
+      if(seed) usedNameWords.add(seed);
+
+      result.push({
+        rowNumber:index+1,
+        name:parsed.name||'',
+        org:parsed.org||'',
+        phone:anchor.phone,
+        confidence:((Number(parsed.confidence)||0)+(Number(anchor.conf)||0))/2,
+        selected:Boolean(plausibleOcrName(parsed.name)),
+        state:'bad',
+        reason:'확인 필요',
+        looseLayout:true
+      });
+    });
+
+    const seen=new Set();
+    return result.filter(row=>{
+      const key=`${row.phone}|${ocrComparableName(row.name)}`;
+      if(seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function mergeLooseOcrRows(primaryRows=[], looseRows=[]) {
+    const result=primaryRows.map(row=>({...row}));
+    looseRows.forEach(loose=>{
+      const index=result.findIndex(row=>row.phone===loose.phone);
+      if(index<0){
+        result.push({...loose});
+        return;
+      }
+
+      const current=result[index];
+      const currentName=ocrComparableName(current.name);
+      const looseName=ocrComparableName(loose.name);
+
+      if(!plausibleOcrName(current.name) && plausibleOcrName(loose.name)){
+        current.name=loose.name;
+      } else if(
+        plausibleOcrName(current.name) &&
+        plausibleOcrName(loose.name) &&
+        currentName!==looseName &&
+        (Number(loose.confidence)||0)>(Number(current.confidence)||0)+9
+      ){
+        current.name=loose.name;
+      }
+
+      if(!String(current.org||'').trim() && String(loose.org||'').trim()){
+        current.org=loose.org;
+      }
+      current.confidence=Math.max(Number(current.confidence)||0,Number(loose.confidence)||0);
+    });
+    return result;
+  }
+
+  async function recognizeOcrLooseLayout(worker, canvas, mode='document') {
+    const scaled=scaleOcrCanvas(canvas,1900);
+    const prepared=enhanceOcrCanvas(scaled,mode);
+
+    try{
+      await worker.setParameters({
+        tessedit_pageseg_mode:'11',
+        tessedit_char_whitelist:'',
+        preserve_interword_spaces:'1',
+        user_defined_dpi:'300'
+      });
+    }catch{}
+    const general=await worker.recognize(prepared, {}, {text:true,tsv:true});
+
+    try{
+      await worker.setParameters({
+        tessedit_pageseg_mode:'11',
+        tessedit_char_whitelist:'0123456789',
+        preserve_interword_spaces:'1',
+        user_defined_dpi:'300'
+      });
+    }catch{}
+    const digits=await worker.recognize(prepared, {}, {text:true,tsv:true});
+
+    const anchors=extractPhoneAnchors(String(digits?.data?.tsv||''));
+    const rows=looseRowsFromPhoneAnchors(String(general?.data?.tsv||''),anchors);
+    return {
+      text:String(general?.data?.text||'').trim(),
+      rows,
+      anchors,
+      score:scoreOcrRows(rows)
+    };
+  }
+
   function tableRowsFromTsv(tsv='') {
     const rows=clusterOcrRows(parseTsvWords(tsv)); const result=[];
     rows.forEach((words,rowIndex)=>{
@@ -3667,7 +3846,29 @@
       }
     }
 
-    return {text:String(general?.data?.text||'').trim(),rows,anchors,score:scoreOcrRows(rows)};
+    // 표의 선·칸·행이 없거나 OCR이 행 구조를 제대로 만들지 못한 경우에만
+    // Sparse Text(PSM 11)로 한 번 더 읽어 전화번호와 가까운 이름을 공간적으로 연결합니다.
+    let finalAnchors=anchors;
+    let finalText=String(general?.data?.text||'').trim();
+    const usableRows=rows.filter(row=>plausibleOcrName(row.name)&&/^\d{4}$/.test(row.phone)).length;
+    const needsLoosePass=
+      rows.length===0 ||
+      anchors.length===0 ||
+      usableRows<rows.length ||
+      (anchors.length>0 && rows.length<anchors.length);
+
+    if(needsLoosePass){
+      try{
+        const loose=await recognizeOcrLooseLayout(worker,canvas,mode);
+        rows=mergeLooseOcrRows(rows,loose.rows);
+        if(loose.anchors.length>finalAnchors.length) finalAnchors=loose.anchors;
+        if(!finalText && loose.text) finalText=loose.text;
+      }catch(error){
+        console.warn('OCR loose-layout pass skipped:',error);
+      }
+    }
+
+    return {text:finalText,rows,anchors:finalAnchors,score:scoreOcrRows(rows)};
   }
 
   async function handleOcrImageFile(e) {
@@ -3902,7 +4103,7 @@
     area.innerHTML=`
       ${oldImage?`<img class="ocr-preview-image" id="ocrPreviewImage" alt="종이 명단 미리보기" src="${escapeHtml(oldImage)}">`:''}
       <div class="ocr-summary"><div><span>등록 가능</span><b id="ocrOkCount">${ok}</b></div><div><span>중복 제외</span><b id="ocrSkipCount">${skip}</b></div><div><span>확인 필요</span><b id="ocrBadCount">${bad}</b></div></div>
-      <div class="ocr-privacy" style="margin:0 0 8px;">사진 방향·조명·그림자를 보정하고 전화번호는 숫자 전용 OCR로 다시 읽습니다. 기존 참가자와 전화번호가 일치하면 이름·소속도 교차 확인합니다. 칸을 연속으로 눌러도 키보드가 내려가지 않습니다.</div>
+      <div class="ocr-privacy" style="margin:0 0 8px;">사진 방향·조명·그림자를 보정하고 전화번호는 숫자 전용 OCR로 다시 읽습니다. 표의 선·칸·행이 없어도 전화번호 주변의 이름·소속을 공간적으로 연결해 인식합니다. 기존 참가자와 전화번호가 일치하면 이름·소속도 교차 확인합니다.</div>
       <div id="ocrEditableRows">
         ${state.ocrRows.length?state.ocrRows.map((row,index)=>`<div class="ocr-row" data-ocr-index="${index}"><input type="checkbox" class="ocr-select" ${row.selected?'checked':''} aria-label="등록 선택"><input class="ocr-name" value="${escapeHtml(row.name)}" maxlength="30" placeholder="이름" enterkeyhint="next" autocomplete="off"><input class="ocr-org" value="${escapeHtml(row.org)}" maxlength="50" placeholder="소속" enterkeyhint="next" autocomplete="off"><div><input class="ocr-phone" value="${escapeHtml(row.phone)}" inputmode="numeric" maxlength="4" placeholder="뒤4자리" enterkeyhint="next" autocomplete="off"><div class="ocr-row-state ${row.state}">${escapeHtml(row.reason)}</div></div></div>`).join(''):'<div class="ocr-message">전화번호 4자리를 확실하게 읽은 명단 행을 찾지 못했습니다. 자동 보정으로도 복구되지 않는 흔들림·심한 초점 흐림은 글자 정보가 사라질 수 있습니다. 조금 더 가까이 촬영하거나 아래 `+ 행 추가`로 직접 입력해주세요.</div>'}
       </div>
