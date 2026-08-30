@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v36-9-persistent-popup-stack-20260830';
+const CACHE='qr-attendance-v36-10-manual-status-grace-20260830';
 const ASSETS=[
 './','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'

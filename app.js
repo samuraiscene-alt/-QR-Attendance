@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.9 · persistent live popup stack + bell archive split + manual status confirmation
+  // QR Attendance V36.10 · 3-second manual status edit grace + V36.9 popup/bell behavior preserved
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -2627,6 +2627,21 @@
     });
   }
 
+  const MANUAL_STATUS_GRACE_MS = 3000;
+  const manualStatusGraceUntil = new Map();
+  const manualStatusChangeInFlight = new Set();
+
+  function hasManualStatusGrace(linkId) {
+    const until = manualStatusGraceUntil.get(linkId) || 0;
+    if (Date.now() < until) return true;
+    manualStatusGraceUntil.delete(linkId);
+    return false;
+  }
+
+  function armManualStatusGrace(linkId) {
+    manualStatusGraceUntil.set(linkId, Date.now() + MANUAL_STATUS_GRACE_MS);
+  }
+
   async function cycleStatus(linkId) {
     const p = state.people.find(x => x.linkId === linkId);
     if (!p || !state.event) return;
@@ -2634,14 +2649,19 @@
       toast('종료된 행사는 출석 상태를 변경할 수 없습니다.');
       return;
     }
+    if (manualStatusChangeInFlight.has(linkId)) return;
 
-    const approved = await confirmManualStatusChange();
-    if (!approved) return;
+    manualStatusChangeInFlight.add(linkId);
+    try {
+      if (!hasManualStatusGrace(linkId)) {
+        const approved = await confirmManualStatusChange();
+        if (!approved) return;
+      }
 
-    const next =
-      p.status === 'unknown' ? 'present' :
-      p.status === 'present' ? 'individual' :
-      'unknown';
+      const next =
+        p.status === 'unknown' ? 'present' :
+        p.status === 'present' ? 'individual' :
+        'unknown';
 
     const patch =
       next === 'individual'
@@ -2691,10 +2711,17 @@
     });
     if (logError) console.error('attendance log error:', logError);
 
-    await loadPeople();
-    await loadAttendanceLogs();
-    renderAll();
-    queueGoogleSheetsCurrentSync();
+      await loadPeople();
+      await loadAttendanceLogs();
+      renderAll();
+
+      // 마지막으로 정상 변경된 시점부터 3초 동안 같은 참가자는
+      // 추가 확인창 없이 연속 상태 변경을 허용합니다.
+      armManualStatusGrace(linkId);
+      queueGoogleSheetsCurrentSync();
+    } finally {
+      manualStatusChangeInFlight.delete(linkId);
+    }
   }
 
   async function addPerson(e) {
