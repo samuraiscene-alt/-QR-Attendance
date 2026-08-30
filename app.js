@@ -305,6 +305,7 @@
       await loadGatheringQr();
       subscribeRealtime();
       renderAll();
+      recoverMissedQrNotifications();
       queueGoogleSheetsCurrentSync(500);
     } catch (e) {
       console.error(e);
@@ -1153,12 +1154,18 @@
 
   const notificationState = {
     items: [],
+    liveItem: null,
+    liveTimer: null,
+    seenIds: [],
+    baselineReady: false,
     expanded: false,
     y: null,
     dragging: false,
     moved: false,
     scrolling: false,
-    storageKey: 'qr-attendance-notification-stack-v21',
+    storageKey: 'qr-attendance-notification-stack-v35',
+    seenKey: 'qr-attendance-notification-seen-v35',
+    baselineKey: 'qr-attendance-notification-baseline-v35',
     positionKey: 'qr-attendance-notification-position-v21'
   };
 
@@ -1172,6 +1179,19 @@
       notificationState.items = Array.isArray(saved) ? saved.slice(-30) : [];
     } catch {
       notificationState.items = [];
+    }
+
+    try {
+      const seen = JSON.parse(localStorage.getItem(notificationState.seenKey) || '[]');
+      notificationState.seenIds = Array.isArray(seen) ? seen.slice(-250) : [];
+    } catch {
+      notificationState.seenIds = [];
+    }
+
+    try {
+      notificationState.baselineReady = localStorage.getItem(notificationState.baselineKey) === '1';
+    } catch {
+      notificationState.baselineReady = false;
     }
 
     try {
@@ -1189,6 +1209,26 @@
         JSON.stringify(notificationState.items.slice(-30))
       );
     } catch {}
+  }
+
+  function saveSeenNotificationIds() {
+    try {
+      localStorage.setItem(
+        notificationState.seenKey,
+        JSON.stringify(notificationState.seenIds.slice(-250))
+      );
+    } catch {}
+  }
+
+  function markNotificationSeen(id) {
+    if (!id || notificationState.seenIds.includes(id)) return;
+    notificationState.seenIds.push(id);
+    notificationState.seenIds = notificationState.seenIds.slice(-250);
+    saveSeenNotificationIds();
+  }
+
+  function markNotificationsSeen(items=[]) {
+    items.forEach(item => markNotificationSeen(item?.logId || item?.id));
   }
 
   function saveNotificationPosition() {
@@ -1341,6 +1381,7 @@
 
     $('#attendanceNoticeClear').addEventListener('click', e => {
       e.stopPropagation();
+      markNotificationsSeen(notificationState.items);
       notificationState.items = [];
       notificationState.expanded = false;
       saveNotificationState();
@@ -1411,7 +1452,8 @@
 
   function applyNotificationPosition() {
     const center = $('#attendanceNoticeCenter');
-    if (!center || notificationState.items.length === 0) return;
+    const hasNotice = Boolean(notificationState.liveItem) || notificationState.items.length > 0;
+    if (!center || !hasNotice) return;
 
     if (!Number.isFinite(notificationState.y)) {
       notificationState.y = defaultNotificationY();
@@ -1428,11 +1470,15 @@
 
     const center = $('#attendanceNoticeCenter');
     const stack = $('#attendanceNoticeStack');
+    const clear = $('#attendanceNoticeClear');
     if (!center || !stack) return;
 
-    const items = notificationState.items;
+    const showingLive = Boolean(notificationState.liveItem);
+    const items = showingLive ? [notificationState.liveItem] : notificationState.items;
     center.classList.toggle('is-empty', items.length === 0);
-    stack.className = notificationState.expanded ? 'expanded' : 'collapsed';
+    center.classList.toggle('live-only', showingLive);
+    stack.className = !showingLive && notificationState.expanded ? 'expanded' : 'collapsed';
+    if (clear) clear.style.display = showingLive || items.length === 0 ? 'none' : 'grid';
 
     stack.innerHTML = items.map(item => `
       <div class="attendance-notice"
@@ -1577,43 +1623,109 @@
   }
 
   function removeNotification(id) {
+    if (notificationState.liveItem?.id === id) {
+      clearTimeout(notificationState.liveTimer);
+      notificationState.liveTimer = null;
+      notificationState.liveItem = null;
+      renderNotificationCenter();
+      return;
+    }
+
+    const removed = notificationState.items.find(x => x.id === id);
+    if (removed) markNotificationSeen(removed.logId || removed.id);
     notificationState.items = notificationState.items.filter(x => x.id !== id);
     if (notificationState.items.length <= 1) notificationState.expanded = false;
     saveNotificationState();
     renderNotificationCenter();
   }
 
-  function pushAttendanceNotification(person, status) {
+  function isQrNotificationLog(log) {
+    return Boolean(
+      log &&
+      log.source === 'qr' &&
+      (log.action === 'check_in' || log.action === 'arrival')
+    );
+  }
+
+  function notificationItemFromLog(log) {
+    if (!isQrNotificationLog(log)) return null;
+    const person = state.people.find(p => p.participantId === log.participantId) || {};
+    const id = log.id || `${log.participantId || 'qr'}-${log.createdAt || Date.now()}`;
+    return {
+      id,
+      logId: log.id || id,
+      name: person.name || log.name || '이름 없음',
+      phone: person.phone || '----',
+      org: person.org || log.org || '소속 없음',
+      status: log.action === 'arrival' ? 'arrived' : 'present',
+      createdAt: log.createdAt || new Date().toISOString()
+    };
+  }
+
+  function showLiveQrNotification(item) {
+    if (!item) return;
     const toggle = $('#popupToggle');
+    markNotificationSeen(item.logId || item.id);
     if (toggle && !toggle.checked) return;
 
     ensureNotificationCenter();
-
-    notificationState.items.push({
-      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      name: person?.name || '이름 없음',
-      phone: person?.phone || '----',
-      org: person?.org || '소속 없음',
-      status,
-      createdAt: new Date().toISOString()
-    });
-
-    notificationState.items = notificationState.items.slice(-30);
+    clearTimeout(notificationState.liveTimer);
+    notificationState.liveItem = item;
     notificationState.expanded = false;
+    notificationState.y = defaultNotificationY();
+    saveNotificationPosition();
+    renderNotificationCenter();
 
-    // New alerts always appear in the center, as requested.
+    notificationState.liveTimer = setTimeout(() => {
+      notificationState.liveItem = null;
+      notificationState.liveTimer = null;
+      renderNotificationCenter();
+    }, 3000);
+  }
+
+  function saveNotificationBaseline() {
+    try {
+      localStorage.setItem(notificationState.baselineKey, '1');
+      notificationState.baselineReady = true;
+    } catch {}
+  }
+
+  function recoverMissedQrNotifications() {
+    const qrLogs = state.logs
+      .filter(isQrNotificationLog)
+      .slice()
+      .sort((a,b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+
+    if (!notificationState.baselineReady) {
+      markNotificationsSeen(qrLogs.map(log => ({logId:log.id})));
+      saveNotificationBaseline();
+      return;
+    }
+
+    const toggle = $('#popupToggle');
+    const pendingIds = new Set(notificationState.items.map(x => x.logId || x.id));
+    const unseen = qrLogs.filter(log =>
+      log.id &&
+      !notificationState.seenIds.includes(log.id) &&
+      !pendingIds.has(log.id)
+    );
+
+    if (!unseen.length) return;
+
+    if (toggle && !toggle.checked) {
+      unseen.forEach(log => markNotificationSeen(log.id));
+      return;
+    }
+
+    const items = unseen.map(notificationItemFromLog).filter(Boolean);
+    if (!items.length) return;
+
+    notificationState.items = [...notificationState.items, ...items].slice(-30);
+    notificationState.expanded = false;
     notificationState.y = defaultNotificationY();
     saveNotificationPosition();
     saveNotificationState();
     renderNotificationCenter();
-  }
-
-  function showAttendancePopup(person, checkedAt) {
-    pushAttendanceNotification(person, 'present');
-  }
-
-  function showArrivalPopup(person, arrivedAt) {
-    pushAttendanceNotification(person, 'arrived');
   }
 
   function ensureParticipantEditUI() {
@@ -2107,8 +2219,6 @@
     await loadAttendanceLogs();
     renderAll();
     queueGoogleSheetsCurrentSync();
-    const updatedPerson = state.people.find(x => x.linkId === linkId) || p;
-    pushAttendanceNotification(updatedPerson, next);
   }
 
   async function addPerson(e) {
@@ -2178,28 +2288,10 @@
           table:'event_participants',
           filter:`event_id=eq.${state.event.id}`
         },
-        async (payload) => {
-          const isQrCheckIn =
-            payload?.eventType === 'UPDATE' &&
-            payload?.new?.attendance_status === 'checked_in' &&
-            payload?.new?.check_source === 'qr';
-          const isQrArrival =
-            payload?.eventType === 'UPDATE' &&
-            payload?.new?.attendance_status === 'arrived' &&
-            payload?.new?.check_source === 'qr' &&
-            Boolean(payload?.new?.arrived_at);
-          const participantId = payload?.new?.participant_id || null;
-          const checkedAt = payload?.new?.checked_at || null;
-          const arrivedAt = payload?.new?.arrived_at || null;
+        async () => {
           await loadPeople();
           renderAll();
           queueGoogleSheetsCurrentSync();
-          const person = state.people.find(p => p.participantId === participantId);
-          if (isQrCheckIn) {
-            showAttendancePopup(person, checkedAt);
-          } else if (isQrArrival) {
-            showArrivalPopup(person, arrivedAt);
-          }
         }
       )
       .on(
@@ -2210,12 +2302,178 @@
           table:'attendance_logs',
           filter:`event_id=eq.${state.event.id}`
         },
-        async () => {
+        async (payload) => {
           await loadAttendanceLogs();
-          renderStatus();
+          await loadPeople();
+          renderAll();
+
+          const row = payload?.new || {};
+          const log = {
+            id: row.id || '',
+            participantId: row.participant_id || '',
+            action: row.action || '',
+            source: row.source || '',
+            createdAt: row.created_at || new Date().toISOString()
+          };
+
+          if (isQrNotificationLog(log) && document.visibilityState === 'visible') {
+            showLiveQrNotification(notificationItemFromLog(log));
+          }
         }
       )
       .subscribe();
+  }
+
+  let resumeRefreshBusy = false;
+
+  async function refreshAfterAppResume() {
+    if (resumeRefreshBusy || !sb || !state.user) return;
+    resumeRefreshBusy = true;
+
+    try {
+      await loadLatestEvent();
+      await loadPeople();
+      await loadAttendanceLogs();
+      await ensureManualEndQrValidity();
+      await loadGatheringQr();
+      subscribeRealtime();
+      renderAll();
+      recoverMissedQrNotifications();
+      queueGoogleSheetsCurrentSync(250);
+    } catch (error) {
+      console.error('resume refresh error:', error);
+    } finally {
+      resumeRefreshBusy = false;
+    }
+  }
+
+  function ensureResponsiveLayout() {
+    if ($('#responsiveLayoutV35')) return;
+
+    const style = document.createElement('style');
+    style.id = 'responsiveLayoutV35';
+    style.textContent = `
+      /* iPhone landscape: use the available width instead of keeping a portrait column. */
+      @media (orientation:landscape) and (max-height:600px) {
+        body{padding-top:0!important}
+        .app-shell{
+          width:100%!important;
+          max-width:none!important;
+          min-height:100dvh;
+          padding-bottom:66px!important;
+          border-radius:0!important;
+          box-shadow:none!important;
+          overflow:visible!important;
+        }
+        .topbar{
+          padding:calc(7px + env(safe-area-inset-top)) max(18px,env(safe-area-inset-right)) 6px max(18px,env(safe-area-inset-left))!important;
+        }
+        .app-icon{width:46px!important;height:46px!important;border-radius:13px!important}
+        .brand-row{gap:11px!important}
+        .brand-copy h1{font-size:22px!important}
+        .brand-copy p{font-size:12px!important;margin-top:3px!important}
+        .icon-button{width:40px!important;height:40px!important}
+        main{
+          padding:4px max(18px,env(safe-area-inset-right)) 18px max(18px,env(safe-area-inset-left))!important;
+        }
+        .section-title{margin:3px 2px 10px!important}
+        .section-title h2{font-size:23px!important}
+        .welcome-card{padding:14px!important;margin-bottom:0!important}
+        .event-card{padding:14px!important;margin-bottom:0!important}
+        .stats-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important;margin-top:12px!important}
+        .stat{padding:9px 5px!important}
+        .stat b{font-size:20px!important}
+        [data-screen="home"].active{
+          display:grid!important;
+          grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+          gap:12px;
+          align-items:stretch;
+        }
+        [data-screen="home"] .welcome-card{grid-column:1/-1}
+        [data-screen="home"] .event-card{grid-column:1}
+        [data-screen="home"] .qr-hero{grid-column:2;margin-bottom:0!important;height:100%;min-height:126px}
+        [data-screen="home"] .feature-grid,
+        [data-screen="home"] .compact-actions{grid-column:1/-1;margin-bottom:0!important}
+        .feature-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:9px!important}
+        .feature-card{min-height:98px!important;padding:12px!important}
+        .feature-card strong{font-size:13px!important;margin-top:7px!important}
+        .feature-card small{font-size:10px!important}
+        .feature-icon{width:36px!important;height:36px!important}
+        .people-list{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px!important}
+        .person-card{min-width:0}
+        [data-screen="qr"].active .qr-panel{
+          display:grid;
+          grid-template-columns:minmax(165px,210px) minmax(0,1fr);
+          grid-template-rows:auto auto auto auto;
+          column-gap:22px;
+          row-gap:6px;
+          text-align:left;
+          padding:16px 20px!important;
+          align-items:center;
+        }
+        [data-screen="qr"] .fake-qr{
+          grid-column:1;
+          grid-row:1/5;
+          width:min(31vw,195px)!important;
+          margin:0 auto!important;
+        }
+        [data-screen="qr"] .qr-panel h3,
+        [data-screen="qr"] .qr-panel p,
+        [data-screen="qr"] .qr-panel button{grid-column:2;margin-top:5px!important}
+        [data-screen="qr"] .qr-panel h3{margin-bottom:2px!important}
+        [data-screen="qr"] .qr-panel p{margin-bottom:1px!important}
+        .tabbar{
+          width:100%!important;
+          padding:4px max(14px,env(safe-area-inset-right)) calc(4px + env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left))!important;
+        }
+        .tab{gap:1px!important;font-size:9px!important;padding:2px!important}
+        .tab svg{width:19px!important;height:19px!important}
+        #attendanceNoticeCenter{
+          left:50%!important;
+          right:auto!important;
+          width:min(calc(100% - 40px),680px)!important;
+          transform:translate(-50%,-50%)!important;
+        }
+      }
+
+      /* iPad / large screens: expand naturally while keeping the phone layout unchanged. */
+      @media (min-width:700px) and (min-height:601px) {
+        body{padding-top:0!important}
+        .app-shell{
+          width:min(100%,1100px)!important;
+          max-width:1100px!important;
+          min-height:100dvh;
+          border-radius:0!important;
+          overflow:visible!important;
+        }
+        .topbar{padding-left:32px!important;padding-right:32px!important}
+        main{padding-left:30px!important;padding-right:30px!important}
+        .tabbar{width:min(100%,1100px)!important}
+        [data-screen="home"].active{
+          display:grid!important;
+          grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+          gap:16px;
+          align-items:stretch;
+        }
+        [data-screen="home"] .welcome-card{grid-column:1/-1;margin-bottom:0!important}
+        [data-screen="home"] .event-card{grid-column:1;margin-bottom:0!important}
+        [data-screen="home"] .qr-hero{grid-column:2;margin-bottom:0!important;height:100%}
+        [data-screen="home"] .feature-grid,
+        [data-screen="home"] .compact-actions{grid-column:1/-1;margin-bottom:0!important}
+        .feature-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important}
+        .people-list{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px!important}
+        #statusDetailStats{grid-template-columns:repeat(5,minmax(0,1fr))!important}
+        [data-screen="qr"] .qr-panel{max-width:820px;margin-left:auto;margin-right:auto}
+        [data-screen="settings"] .form-card{max-width:760px;margin-left:auto;margin-right:auto}
+        #attendanceNoticeCenter{
+          left:50%!important;
+          right:auto!important;
+          width:min(calc(100% - 56px),680px)!important;
+          transform:translate(-50%,-50%)!important;
+        }
+      }
+    `;
+    document.head.appendChild(style);
   }
 
   function wireUI() {
@@ -4209,6 +4467,7 @@
     ensureOcrUI();
     loadNotificationState();
     ensureNotificationCenter();
+    ensureResponsiveLayout();
     renderNotificationCenter();
     wireUI();
 
@@ -4216,6 +4475,21 @@
       if (!notificationState.expanded) {
         requestAnimationFrame(applyNotificationPosition);
       }
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        refreshAfterAppResume();
+      } else {
+        clearTimeout(notificationState.liveTimer);
+        notificationState.liveTimer = null;
+        notificationState.liveItem = null;
+        renderNotificationCenter();
+      }
+    });
+
+    window.addEventListener('pageshow', () => {
+      if (document.visibilityState === 'visible') refreshAfterAppResume();
     });
 
     if (!sb) {
