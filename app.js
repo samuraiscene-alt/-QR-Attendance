@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.4 · stable OCR primary + isolated flexible-layout rescue
+  // QR Attendance V36.5 · notification center quiet confirm + V36.4 OCR behavior preserved
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -1929,7 +1929,6 @@
       renderNotificationCenter();
       updateNotificationBellState();
       renderNotificationHistory();
-      toast('QR 알림을 모두 확인했습니다.');
     });
   }
 
