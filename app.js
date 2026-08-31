@@ -2551,7 +2551,7 @@
             ${p.status === 'present' && p.checkedAt
               ? `<span class="status-button present" style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;">${escapeHtml(formatCheckTime(p.checkedAt))}</span>`
               : ''}
-            <button class="status-button ${p.status}" data-person="${p.linkId}"${state.event?.status === 'ended' ? ' disabled aria-disabled="true"' : ''}${p.status === 'present' ? ' style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;"' : ''}>
+            <button class="status-button ${p.status}" data-person="${p.linkId}"${p.status === 'present' ? ' style="width:58px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;"' : ''}>
               ${personStatusLabel(p)}
             </button>
           </div>`}
@@ -2832,10 +2832,6 @@
   async function cycleStatus(linkId) {
     const p = state.people.find(x => x.linkId === linkId);
     if (!p || !state.event) return;
-    if (state.event.status === 'ended') {
-      toast('종료된 행사는 출석 상태를 변경할 수 없습니다.');
-      return;
-    }
     if (manualStatusChangeInFlight.has(linkId)) return;
 
     manualStatusChangeInFlight.add(linkId);
