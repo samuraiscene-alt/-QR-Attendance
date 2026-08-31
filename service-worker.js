@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v36-15-proxy-share-preview-20260830';
+const CACHE='qr-attendance-v36-17-popup-safe-20260831';
 const ASSETS=[
 './','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./proxy-share-v36-15.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'

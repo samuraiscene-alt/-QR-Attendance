@@ -1541,6 +1541,14 @@
         left:16px;
         right:16px;
         top:52%;
+        bottom:auto;
+        width:auto;
+        height:auto;
+        margin:0;
+        padding:0;
+        border:0;
+        background:transparent;
+        overflow:visible;
         transform:translateY(-50%);
         z-index:9000;
         pointer-events:none;
@@ -1548,6 +1556,10 @@
       }
       #attendanceNoticeCenter.is-empty{display:none}
       #attendanceNoticeCenter.dragging{transition:none}
+      #attendanceNoticeCenter.proxy-qr-open{
+        top:calc(env(safe-area-inset-top, 0px) + 10px);
+        transform:none;
+      }
       #attendanceNoticeStack{position:relative;width:100%;pointer-events:auto}
       #attendanceNoticeStack.collapsed{height:82px;overflow:visible}
       #attendanceNoticeStack.expanded{
@@ -1605,12 +1617,14 @@
     const center = document.createElement('div');
     center.id = 'attendanceNoticeCenter';
     center.className = 'is-empty';
+    center.setAttribute('popover', 'manual');
     center.innerHTML = `
       <div id="attendanceNoticeStack" class="collapsed" aria-label="실시간 출석 알림"></div>
       <button id="attendanceNoticeClear" type="button" aria-label="실시간 팝업 전체 삭제">×</button>
     `;
     document.body.appendChild(center);
 
+    installNotificationDialogObserver();
     installNotificationCenterDrag(center);
 
     $('#attendanceNoticeClear').addEventListener('click', e => {
@@ -1702,11 +1716,93 @@
     }, {passive:true});
 
     stack.addEventListener('click', () => {
+      if (isProxyQrPreviewOpen()) return;
       if (notificationState.dragging || notificationState.moved || notificationState.scrolling || tapMoved) return;
       if (notificationState.popupItems.length === 0 || notificationState.expanded) return;
       clearPopupTimer();
       notificationState.expanded = true;
       renderNotificationCenter();
+    });
+  }
+
+  let notificationDialogObserverInstalled = false;
+
+  function openDialogForNotificationFallback() {
+    const dialogs = Array.from(document.querySelectorAll('dialog[open]'));
+    return dialogs.length ? dialogs[dialogs.length - 1] : null;
+  }
+
+  function isProxyQrPreviewOpen() {
+    return !!document.querySelector('#proxySharePreviewDialog[open]');
+  }
+
+  function syncNotificationTopLayer(center, hasItems, forceRaise=false) {
+    if (!center) return;
+
+    const canUsePopover =
+      typeof center.showPopover === 'function' &&
+      typeof center.hidePopover === 'function';
+
+    if (canUsePopover) {
+      try {
+        const isOpen = center.matches(':popover-open');
+
+        if (!hasItems) {
+          if (isOpen) center.hidePopover();
+          if (center.parentElement !== document.body) document.body.appendChild(center);
+          return;
+        }
+
+        if (center.parentElement !== document.body) document.body.appendChild(center);
+
+        // dialog.showModal()도 top layer를 사용합니다.
+        // 이미 떠 있던 팝업보다 모달이 나중에 열리면 모달이 위에 오므로,
+        // 모달이 열릴 때 팝업을 한 번 재오픈해 항상 가장 위로 올립니다.
+        if (forceRaise && isOpen) center.hidePopover();
+        if (!center.matches(':popover-open')) center.showPopover();
+        return;
+      } catch (error) {
+        console.warn('notification popover top-layer fallback:', error);
+      }
+    }
+
+    // Popover API를 지원하지 않는 구형 Safari/PWA용 폴백.
+    // 열린 dialog 내부로 알림 센터를 옮겨 dialog의 top layer 안에서 보이게 합니다.
+    const activeDialog = openDialogForNotificationFallback();
+    if (hasItems && activeDialog) {
+      if (center.parentElement !== activeDialog) activeDialog.appendChild(center);
+    } else if (center.parentElement !== document.body) {
+      document.body.appendChild(center);
+    }
+  }
+
+  function installNotificationDialogObserver() {
+    if (notificationDialogObserverInstalled || !document.body) return;
+    notificationDialogObserverInstalled = true;
+
+    const observer = new MutationObserver(mutations => {
+      const dialogLayerChanged = mutations.some(mutation =>
+        mutation.type === 'attributes' &&
+        mutation.attributeName === 'open' &&
+        mutation.target instanceof HTMLDialogElement
+      );
+      if (!dialogLayerChanged) return;
+
+      requestAnimationFrame(() => {
+        const center = $('#attendanceNoticeCenter');
+        syncNotificationTopLayer(
+          center,
+          notificationState.popupItems.length > 0,
+          notificationState.popupItems.length > 0
+        );
+        applyNotificationPosition();
+      });
+    });
+
+    observer.observe(document.body, {
+      subtree:true,
+      attributes:true,
+      attributeFilter:['open']
     });
   }
 
@@ -1738,6 +1834,18 @@
   function applyNotificationPosition() {
     const center = $('#attendanceNoticeCenter');
     if (!center || !notificationState.popupItems.length) return;
+
+    // 대리 QR 미리보기에서는 참가자가 QR을 촬영해야 하므로
+    // 중앙 QR 영역을 절대 가리지 않고 화면 최상단의 얇은 알림 영역만 사용합니다.
+    if (isProxyQrPreviewOpen()) {
+      center.classList.add('proxy-qr-open');
+      center.style.top = '';
+      center.style.transform = 'none';
+      return;
+    }
+
+    center.classList.remove('proxy-qr-open');
+    center.style.transform = 'translateY(-50%)';
     if (!Number.isFinite(notificationState.y)) notificationState.y = defaultNotificationY();
     requestAnimationFrame(() => {
       notificationState.y = clampNotificationY(notificationState.y, center);
@@ -1756,6 +1864,7 @@
     center.classList.toggle('is-empty', items.length === 0);
     stack.className = notificationState.expanded ? 'expanded' : 'collapsed';
     if (clear) clear.style.display = items.length === 0 ? 'none' : 'grid';
+    syncNotificationTopLayer(center, items.length > 0);
 
     stack.innerHTML = items.map(item => `
       <div class="attendance-notice ${item.id === notificationState.freshPopupId ? 'is-fresh' : ''}" data-notice-id="${escapeHtml(item.id)}" data-status="${escapeHtml(item.status)}">
@@ -1789,6 +1898,7 @@
     let moved = false;
 
     center.addEventListener('touchstart', e => {
+      if (isProxyQrPreviewOpen()) return;
       if (notificationState.expanded) return;
       if (e.target.closest('#attendanceNoticeClear')) return;
       const t = e.touches?.[0];
@@ -1804,6 +1914,7 @@
     }, {passive:true});
 
     center.addEventListener('touchmove', e => {
+      if (isProxyQrPreviewOpen()) return;
       if (notificationState.expanded) return;
       const t = e.touches?.[0];
       if (!t) return;
