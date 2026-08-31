@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.13 · Supabase-synced bell archive + cross-client delete sync + V36.12 behavior preserved
+  // QR Attendance V36.21 · persistent admin settings + V36.20 CSV iOS-safe behavior preserved
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -64,6 +64,42 @@
   };
 
   const QR_NEXT_EVENT_KEY = 'qr-attendance-awaiting-new-event-v22';
+  const UI_SETTINGS_KEY_PREFIX = 'qr-attendance-ui-settings-v36-21';
+
+  function uiSettingsStorageKey() {
+    const userId = state.user?.id || 'anonymous';
+    const organizationId = state.member?.organization_id || 'no-organization';
+    return `${UI_SETTINGS_KEY_PREFIX}:${userId}:${organizationId}`;
+  }
+
+  function restoreUiSettings() {
+    let saved = null;
+    try {
+      saved = JSON.parse(localStorage.getItem(uiSettingsStorageKey()) || 'null');
+    } catch (error) {
+      console.warn('settings restore skipped:', error);
+    }
+
+    if (!saved || typeof saved !== 'object') return;
+    if ($('#popupToggle') && typeof saved.popupEnabled === 'boolean') {
+      $('#popupToggle').checked = saved.popupEnabled;
+    }
+    if ($('#phoneToggle') && typeof saved.phoneVisible === 'boolean') {
+      $('#phoneToggle').checked = saved.phoneVisible;
+    }
+  }
+
+  function persistUiSettings() {
+    const payload = {
+      popupEnabled: $('#popupToggle')?.checked ?? true,
+      phoneVisible: $('#phoneToggle')?.checked ?? true
+    };
+    try {
+      localStorage.setItem(uiSettingsStorageKey(), JSON.stringify(payload));
+    } catch (error) {
+      console.warn('settings local save skipped:', error);
+    }
+  }
 
   function ensureLoginUI() {
     if ($('#authGate')) return;
@@ -304,6 +340,7 @@
       state.organization = org;
 
       setHeaderIdentity();
+      restoreUiSettings();
       installLogout();
       await loadLatestEvent();
       await loadPeople();
@@ -328,6 +365,74 @@
 
     if ($('#orgInput')) $('#orgInput').value = state.organization?.name || '';
     if ($('#managerInput')) $('#managerInput').value = state.member?.display_name || '';
+  }
+
+  async function saveSettings() {
+    if (!sb || !state.user || !state.member || !state.organization) {
+      toast('관리자 데이터 연결을 확인해주세요.');
+      return;
+    }
+
+    const button = $('#saveSettings');
+    const organizationName = ($('#orgInput')?.value || '').trim();
+    const managerName = ($('#managerInput')?.value || '').trim();
+
+    if (!organizationName || !managerName) {
+      toast('기관/모임 이름과 관리자 표시 이름을 입력해주세요.');
+      return;
+    }
+
+    const previousText = button?.textContent || '설정 저장';
+    if (button) {
+      button.disabled = true;
+      button.textContent = '저장 중…';
+    }
+
+    try {
+      let nextOrganization = state.organization;
+      let nextMember = state.member;
+
+      if (organizationName !== (state.organization?.name || '')) {
+        const { data, error } = await sb
+          .from('organizations')
+          .update({ name: organizationName })
+          .eq('id', state.member.organization_id)
+          .select('id, name')
+          .single();
+        if (error) throw error;
+        nextOrganization = { ...state.organization, ...data };
+      }
+
+      if (managerName !== (state.member?.display_name || '')) {
+        const { data, error } = await sb
+          .from('organization_members')
+          .update({ display_name: managerName })
+          .eq('organization_id', state.member.organization_id)
+          .eq('user_id', state.user.id)
+          .select('organization_id, role, display_name')
+          .single();
+        if (error) throw error;
+        nextMember = { ...state.member, ...data };
+      }
+
+      state.organization = nextOrganization;
+      state.member = nextMember;
+      persistUiSettings();
+      setHeaderIdentity();
+      toast('설정 저장 완료');
+    } catch (error) {
+      console.error('settings save error:', error);
+      // 저장 실패 시 입력칸은 서버에 실제 저장된 값으로 되돌려
+      // 화면만 바뀌어 사용자가 저장된 것으로 오해하지 않게 합니다.
+      setHeaderIdentity();
+      restoreUiSettings();
+      toast('설정 저장 실패 · 연결 또는 권한을 확인해주세요.');
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = previousText;
+      }
+    }
   }
 
   function installLogout() {
@@ -3215,7 +3320,7 @@
     });
 
     $('#manualButton')?.addEventListener('click', () => go('roster'));
-    $('#saveSettings')?.addEventListener('click', () => toast('설정 저장 완료'));
+    $('#saveSettings')?.addEventListener('click', saveSettings);
     $('#notificationButton')?.addEventListener('click', openNotificationHistory);
     $('#ocrButton')?.addEventListener('click', openOcrDialog);
     $('#sheetButton')?.addEventListener('click', openSpreadsheetDialog);
