@@ -4947,8 +4947,19 @@
     }
 
     try {
-      const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type:'array', cellDates:false });
+      const isCsv = /\.csv$/i.test(file.name || '') || file.type === 'text/csv';
+      let workbook;
+
+      if (isCsv) {
+        // iPhone Numbers가 만든 UTF-8 CSV(대개 BOM 없음)는 ArrayBuffer로 읽을 때
+        // 한글 헤더가 깨질 수 있으므로 브라우저의 UTF-8 텍스트 디코딩을 먼저 사용한다.
+        const csvText = (await file.text()).replace(/^\uFEFF/, '');
+        workbook = XLSX.read(csvText, { type:'string', cellDates:false });
+      } else {
+        const buffer = await file.arrayBuffer();
+        workbook = XLSX.read(buffer, { type:'array', cellDates:false });
+      }
+
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
       if (!firstSheet) throw new Error('첫 번째 시트를 찾지 못했습니다.');
 

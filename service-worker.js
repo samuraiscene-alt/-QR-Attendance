@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v36-18-ended-admin-correction-20260831';
+const CACHE='qr-attendance-v36-19-csv-utf8-20260901';
 const ASSETS=[
 './','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./proxy-share-v36-15.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'
