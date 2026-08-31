@@ -4937,38 +4937,95 @@
     return `${String(name || '').trim().toLowerCase()}|${String(phone || '').trim()}`;
   }
 
+  function readFileAsUtf8Text(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.onerror = () => reject(reader.error || new Error('CSV 파일을 읽지 못했습니다.'));
+      reader.readAsText(file, 'utf-8');
+    });
+  }
+
+  function parseCsvRows(text) {
+    const source = String(text ?? '').replace(/^\uFEFF/, '');
+    const rows = [];
+    let row = [];
+    let field = '';
+    let quoted = false;
+
+    for (let i = 0; i < source.length; i++) {
+      const ch = source[i];
+
+      if (quoted) {
+        if (ch === '"') {
+          if (source[i + 1] === '"') {
+            field += '"';
+            i++;
+          } else {
+            quoted = false;
+          }
+        } else {
+          field += ch;
+        }
+        continue;
+      }
+
+      if (ch === '"') {
+        quoted = true;
+      } else if (ch === ',') {
+        row.push(field);
+        field = '';
+      } else if (ch === '\n') {
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = '';
+      } else if (ch !== '\r') {
+        field += ch;
+      }
+    }
+
+    if (quoted) throw new Error('CSV 따옴표 형식이 올바르지 않습니다.');
+    if (field !== '' || row.length) {
+      row.push(field);
+      rows.push(row);
+    }
+
+    return rows.filter(r => r.some(v => String(v ?? '').trim() !== ''));
+  }
+
   async function handleSpreadsheetFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!window.XLSX) {
+    const isCsv = /\.csv$/i.test(file.name || '') || /(?:^|\/)csv$/i.test(file.type || '') || file.type === 'text/csv';
+
+    if (!isCsv && !window.XLSX) {
       $('#sheetPreview').innerHTML = '<div class="sheet-preview-message">Excel 처리 모듈을 불러오지 못했습니다. 인터넷 연결 후 다시 시도해주세요.</div>';
       return;
     }
 
     try {
-      const isCsv = /\.csv$/i.test(file.name || '') || file.type === 'text/csv';
-      let workbook;
+      let rows;
 
       if (isCsv) {
-        // iPhone Numbers가 만든 UTF-8 CSV(대개 BOM 없음)는 ArrayBuffer로 읽을 때
-        // 한글 헤더가 깨질 수 있으므로 브라우저의 UTF-8 텍스트 디코딩을 먼저 사용한다.
-        const csvText = (await file.text()).replace(/^\uFEFF/, '');
-        workbook = XLSX.read(csvText, { type:'string', cellDates:false });
+        // iPhone Safari/Numbers 조합에서도 안정적으로 동작하도록 FileReader로 UTF-8을 직접 읽고,
+        // CSV는 XLSX 모듈을 거치지 않고 자체 파서로 처리한다.
+        const csvText = await readFileAsUtf8Text(file);
+        rows = parseCsvRows(csvText);
       } else {
         const buffer = await file.arrayBuffer();
-        workbook = XLSX.read(buffer, { type:'array', cellDates:false });
+        const workbook = XLSX.read(buffer, { type:'array', cellDates:false });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        if (!firstSheet) throw new Error('첫 번째 시트를 찾지 못했습니다.');
+
+        rows = XLSX.utils.sheet_to_json(firstSheet, {
+          header:1,
+          defval:'',
+          raw:false,
+          blankrows:false
+        });
       }
-
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      if (!firstSheet) throw new Error('첫 번째 시트를 찾지 못했습니다.');
-
-      const rows = XLSX.utils.sheet_to_json(firstSheet, {
-        header:1,
-        defval:'',
-        raw:false,
-        blankrows:false
-      });
 
       if (!rows.length) throw new Error('파일에 데이터가 없습니다.');
 
