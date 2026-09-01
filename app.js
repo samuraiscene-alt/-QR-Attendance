@@ -428,6 +428,22 @@
       setHeaderIdentity();
       // 전화번호 표시 설정은 저장 즉시 현재 관리자 명단에도 반영합니다.
       renderPeople();
+
+      // 실시간 팝업을 OFF → ON으로 다시 켠 경우 Safari/PWA의 기존
+      // Supabase Realtime 채널이 살아 있더라도 새 채널로 재구독해
+      // 다음 QR 출석부터 팝업 수신을 즉시 다시 활성화합니다.
+      const popupEnabled = $('#popupToggle')?.checked ?? true;
+      if (popupEnabled) {
+        if (state.event && state.event.status !== 'ended') subscribeRealtime();
+      } else {
+        // OFF 저장 시 이미 떠 있던 팝업도 즉시 정리합니다. 종 알림 기록은 유지합니다.
+        clearPopupTimer();
+        notificationState.popupItems = [];
+        notificationState.freshPopupId = null;
+        notificationState.expanded = false;
+        renderNotificationCenter();
+      }
+
       toast('설정 저장 완료');
     } catch (error) {
       console.error('settings save error:', error);
