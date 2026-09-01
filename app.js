@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.25 · current-password verification required before admin password change
+  // QR Attendance V36.26 · manual duplicate guard + roster search clear button
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -1478,6 +1478,63 @@
 
       return filterOk && searchOk;
     });
+  }
+
+  function updateSearchClearButton() {
+    const input = $('#searchInput');
+    const button = $('#searchClearButton');
+    if (!input || !button) return;
+    const hasText = Boolean(input.value);
+    button.hidden = !hasText;
+    button.setAttribute('aria-hidden', hasText ? 'false' : 'true');
+  }
+
+  function ensureSearchClearButton() {
+    const input = $('#searchInput');
+    const box = input?.closest('.search-box');
+    if (!input || !box) return;
+
+    if (!$('#searchClearButton')) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.id = 'searchClearButton';
+      button.className = 'search-clear-button';
+      button.setAttribute('aria-label', '검색어 지우기');
+      button.innerHTML = '<span aria-hidden="true">×</span>';
+      box.appendChild(button);
+
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        input.value = '';
+        state.search = '';
+        renderPeople();
+        updateSearchClearButton();
+        input.focus({ preventScroll: true });
+      });
+    }
+
+    if (!$('#searchClearButtonStyle')) {
+      const style = document.createElement('style');
+      style.id = 'searchClearButtonStyle';
+      style.textContent = `
+        .search-box{position:relative;}
+        .search-box #searchInput{padding-right:58px;}
+        .search-box input[type="search"]::-webkit-search-cancel-button{display:none;}
+        .search-clear-button{
+          position:absolute;right:12px;top:50%;transform:translateY(-50%);
+          width:36px;height:36px;border:0;border-radius:999px;
+          display:flex;align-items:center;justify-content:center;
+          background:#eef3f3;color:#7e888d;font-size:29px;font-weight:500;
+          line-height:1;padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent;
+        }
+        .search-clear-button[hidden]{display:none!important;}
+        .search-clear-button:active{transform:translateY(-50%) scale(.94);}
+      `;
+      document.head.appendChild(style);
+    }
+
+    updateSearchClearButton();
   }
 
   function formatCheckTime(iso) {
@@ -3093,6 +3150,17 @@
 
     if (!name) return;
 
+    // 현재 행사에서는 같은 이름 + 전화번호 뒤 4자리 조합을 중복 등록하지 않습니다.
+    // 소속은 변경될 수 있으므로 중복 판정 기준에서 제외합니다.
+    const duplicateKey = importPersonKey(name, phone_last4);
+    const duplicate = state.people.some(person =>
+      importPersonKey(person.name, person.phone) === duplicateKey
+    );
+    if (duplicate) {
+      toast('현재 행사 명단에 같은 이름과 전화번호 뒤 4자리가 이미 있습니다.');
+      return;
+    }
+
     const { data: participant, error } = await sb
       .from('participants')
       .insert({
@@ -3355,6 +3423,8 @@
   }
 
   function wireUI() {
+    ensureSearchClearButton();
+
     $$('[data-go]').forEach(btn =>
       btn.addEventListener('click', () => go(btn.dataset.go))
     );
@@ -3370,6 +3440,7 @@
     $('#searchInput')?.addEventListener('input', e => {
       state.search = e.target.value.trim();
       renderPeople();
+      updateSearchClearButton();
     });
 
     $('#addPersonButton')?.addEventListener('click', () =>
