@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.21 · persistent admin settings + V36.20 CSV iOS-safe behavior preserved
+  // QR Attendance V36.22 · visible Google Sheets manual-sync result + V36.21 settings persistence preserved
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -4829,6 +4829,19 @@
         min-height:48px;border:0;border-radius:14px;background:#fff;color:#159f93;
         font-size:12px;font-weight:900;padding:9px;border:1px solid #d8efeb;
       }
+      .sheet-sync-status{
+        margin-top:9px;
+        padding:9px 10px;
+        border-radius:12px;
+        font-size:11px;
+        font-weight:900;
+        line-height:1.4;
+        text-align:center;
+      }
+      .sheet-sync-status[hidden]{display:none}
+      .sheet-sync-status.loading{background:#eef8f7;color:#397b76}
+      .sheet-sync-status.success{background:#e8f8f4;color:#168a7f}
+      .sheet-sync-status.error{background:#fff0f1;color:#c4454e}
       .sheet-direct-note{margin-top:9px;color:#64777c;font-size:10px;line-height:1.45}
       .sheet-action-grid{display:grid;gap:10px}
       .sheet-action{
@@ -4928,6 +4941,7 @@
             <button type="button" id="googleSheetsImportButton">명단입력 가져오기</button>
             <button type="button" id="googleSheetsSyncButton">현재행사 지금 동기화</button>
           </div>
+          <div id="googleSheetsSyncStatus" class="sheet-sync-status" role="status" aria-live="polite" hidden></div>
           <div class="sheet-direct-note">
             출석·개인출발·현장도착·명단 변경은 Google Sheets의 <strong>현재행사</strong> 탭에 자동 반영되고,
             행사 종료 시 <strong>행사기록</strong> 탭에 보관됩니다.
@@ -4989,16 +5003,51 @@
       }
     });
     $('#googleSheetsImportButton')?.addEventListener('click', previewGoogleSheetsRoster);
-    $('#googleSheetsSyncButton')?.addEventListener('click', () => syncGoogleSheetsCurrent(true));
+    $('#googleSheetsSyncButton')?.addEventListener('click', manualGoogleSheetsCurrentSync);
     $('#spreadsheetFileInput')?.addEventListener('change', handleSpreadsheetFile);
     $('#spreadsheetImportConfirm')?.addEventListener('click', importSpreadsheetRows);
     $('#spreadsheetExportButton')?.addEventListener('click', exportCurrentEventSpreadsheet);
     $('#spreadsheetTemplateButton')?.addEventListener('click', exportSpreadsheetTemplate);
   }
 
+  async function manualGoogleSheetsCurrentSync() {
+    const button = $('#googleSheetsSyncButton');
+    const status = $('#googleSheetsSyncStatus');
+
+    if (button) {
+      button.disabled = true;
+      button.textContent = '동기화 중…';
+    }
+    if (status) {
+      status.hidden = false;
+      status.className = 'sheet-sync-status loading';
+      status.textContent = 'Google Sheets 현재행사를 동기화하고 있습니다…';
+    }
+
+    const ok = await syncGoogleSheetsCurrent(false);
+
+    if (button) {
+      button.disabled = false;
+      button.textContent = '현재행사 지금 동기화';
+    }
+    if (status) {
+      status.hidden = false;
+      status.className = `sheet-sync-status ${ok ? 'success' : 'error'}`;
+      status.textContent = ok
+        ? '✓ Google Sheets 현재행사 동기화 완료'
+        : 'Google Sheets 동기화 실패 · 연결 상태를 확인해주세요.';
+    }
+  }
+
   function openSpreadsheetDialog() {
     ensureSpreadsheetUI();
     resetSpreadsheetPreview();
+    const syncStatus = $('#googleSheetsSyncStatus');
+    if (syncStatus) {
+      syncStatus.hidden = true;
+      syncStatus.className = 'sheet-sync-status';
+      syncStatus.textContent = '';
+    }
     $('#spreadsheetDialog')?.showModal();
   }
 
