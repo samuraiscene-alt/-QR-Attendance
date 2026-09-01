@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.35 · scoped statistics hard reset + double warning
+  // QR Attendance V36.36 · full orphan participant cleanup after hard reset
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -3174,13 +3174,14 @@
       const targets = context.targets.slice();
       const eventIds = targets.map(row => row.id);
       const currentDeleted = Boolean(state.event?.id && eventIds.includes(state.event.id));
-      const candidateParticipantIds = await fetchCandidateParticipantIds(eventIds);
+      // 삭제 후에는 이번 행사 참가자뿐 아니라 과거 버전에서 남은
+      // 동일 기관의 미사용 참가자 찌꺼기까지 한 번에 정리합니다.
 
       // events 삭제 시 FK CASCADE로 QR/출석/명단 연결/알림 삭제 기록이 함께 정리됩니다.
       // 삭제 권한이 없을 때 QR만 먼저 폐기되는 부분 성공 상태를 만들지 않기 위해
       // QR 선행 업데이트 없이 행사 삭제를 먼저 실행합니다.
       await deleteEventsInBatches(eventIds, { endedOnly:false });
-      const orphanCount = await cleanupOrphanParticipants(candidateParticipantIds);
+      const orphanCount = await cleanupAllOrphanParticipants();
 
       if (currentDeleted) {
         markCurrentEventCleared();
@@ -6578,6 +6579,30 @@
       const { error } = await query;
       if (error) throw error;
     }
+  }
+
+  async function cleanupAllOrphanParticipants() {
+    if (!state.member?.organization_id) return 0;
+
+    // 과거 버전에서 이미 행사 연결이 끊겼지만 participants 테이블에 남은
+    // 미사용 참가자까지 함께 정리합니다. 삭제 전에 전체 ID를 먼저 모아
+    // OFFSET 페이지가 삭제 중 당겨지며 일부를 건너뛰는 문제도 피합니다.
+    const participantIds = [];
+    for (let start = 0; ; start += 1000) {
+      const { data, error } = await sb
+        .from('participants')
+        .select('id')
+        .eq('organization_id', state.member.organization_id)
+        .order('id', { ascending:true })
+        .range(start, start + 999);
+      if (error) throw error;
+      for (const row of data || []) {
+        if (row.id) participantIds.push(row.id);
+      }
+      if (!data || data.length < 1000) break;
+    }
+
+    return cleanupOrphanParticipants(participantIds);
   }
 
   async function cleanupOrphanParticipants(candidateIds) {
