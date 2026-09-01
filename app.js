@@ -2653,6 +2653,25 @@
       return;
     }
 
+    // 실제 변경이 있을 때만 저장 확인을 요청합니다.
+    const original = state.people.find(person => person.linkId === linkId);
+    const originalName = original?.name || '';
+    const originalOrg = original?.org || '';
+    const originalPhone = original?.phone || '';
+    const changes = [];
+
+    if (name !== originalName) changes.push(`이름: ${originalName || '없음'} → ${name || '없음'}`);
+    if (affiliation !== originalOrg) changes.push(`소속: ${originalOrg || '없음'} → ${affiliation || '없음'}`);
+    if (phone_last4 !== originalPhone) changes.push(`전화번호 뒤 4자리: ${originalPhone || '없음'} → ${phone_last4 || '없음'}`);
+
+    if (!changes.length) {
+      message.textContent = '변경된 내용이 없습니다.';
+      return;
+    }
+
+    const confirmed = window.confirm(`참가자 정보를 수정하시겠습니까?\n\n변경 내용\n${changes.join('\n')}`);
+    if (!confirmed) return;
+
     save.disabled = true;
     save.textContent = '저장 중…';
     message.textContent = '';
