@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.22 · visible Google Sheets manual-sync result + V36.21 settings persistence preserved
+  // QR Attendance V36.23 · phone-last4 visibility setting applied to admin roster/history + V36.22 sync feedback preserved
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -99,6 +99,13 @@
     } catch (error) {
       console.warn('settings local save skipped:', error);
     }
+  }
+
+  function isPhoneLast4Visible() {
+    // 설정 화면이 존재하는 동안에는 현재 체크 상태를 가장 우선합니다.
+    // 앱 재실행 직후에는 restoreUiSettings()가 이 값을 복원하므로
+    // 관리자 명단/지난 행사 화면 모두 같은 표시 정책을 사용합니다.
+    return $('#phoneToggle')?.checked ?? true;
   }
 
   function ensureLoginUI() {
@@ -419,6 +426,8 @@
       state.member = nextMember;
       persistUiSettings();
       setHeaderIdentity();
+      // 전화번호 표시 설정은 저장 즉시 현재 관리자 명단에도 반영합니다.
+      renderPeople();
       toast('설정 저장 완료');
     } catch (error) {
       console.error('settings save error:', error);
@@ -2644,7 +2653,7 @@
         <div class="avatar">${escapeHtml(p.name.slice(0,1))}</div>
         <div class="person-main">
           <strong>${escapeHtml(p.name)}</strong>
-          <small>${escapeHtml(p.org || '소속 없음')}${p.phone ? ` · •••• ${escapeHtml(p.phone)}` : ''}</small>
+          <small>${escapeHtml(p.org || '소속 없음')}${isPhoneLast4Visible() && p.phone ? ` · •••• ${escapeHtml(p.phone)}` : ''}</small>
           ${p.arrivedAt
             ? `<small style="color:#0b9184;font-weight:850;">현장 도착 ${escapeHtml(formatCheckTime(p.arrivedAt))}</small>`
             : ''}
@@ -5811,7 +5820,7 @@
       <div class="history-person-row">
         <div style="min-width:0;">
           <strong>${escapeHtml(p.participants?.name || '이름 없음')}</strong>
-          <small>${escapeHtml(p.participants?.affiliation || '소속 없음')}${p.participants?.phone_last4 ? ` · •••• ${escapeHtml(p.participants.phone_last4)}` : ''}</small>
+          <small>${escapeHtml(p.participants?.affiliation || '소속 없음')}${isPhoneLast4Visible() && p.participants?.phone_last4 ? ` · •••• ${escapeHtml(p.participants.phone_last4)}` : ''}</small>
         </div>
         <span class="history-status">${escapeHtml(historyStatusLabel(p))}</span>
       </div>
