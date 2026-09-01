@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.28 · duplicate guard inline message + iOS search clear
+  // QR Attendance V36.35 · scoped statistics hard reset + double warning
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -60,11 +60,25 @@
     proxyTokens: [],
     statusScope: 'current',
     statusAggregate: null,
-    statusLoading: false
+    statusLoading: false,
+    statusResetContext: null
   };
 
   const QR_NEXT_EVENT_KEY = 'qr-attendance-awaiting-new-event-v22';
+  const CURRENT_RESET_KEY_PREFIX = 'qr-attendance-current-cleared-v36-35';
   const UI_SETTINGS_KEY_PREFIX = 'qr-attendance-ui-settings-v36-21';
+
+  function currentResetStorageKey() {
+    return `${CURRENT_RESET_KEY_PREFIX}:${state.member?.organization_id || 'no-organization'}`;
+  }
+
+  function markCurrentEventCleared() {
+    try { localStorage.setItem(currentResetStorageKey(), '1'); } catch {}
+  }
+
+  function clearCurrentEventCleared() {
+    try { localStorage.removeItem(currentResetStorageKey()); } catch {}
+  }
 
   function uiSettingsStorageKey() {
     const userId = state.user?.id || 'anonymous';
@@ -617,8 +631,26 @@
 
     if (error) throw error;
 
-    state.event = data?.[0] || null;
-    state.previousEvent = state.event;
+    const latest = data?.[0] || null;
+    state.previousEvent = latest;
+
+    // 현재행사(또는 현재행사를 포함한 기간)를 완전 삭제한 뒤에는
+    // 남아 있는 과거 종료 행사가 다시 '현재행사'로 살아나지 않도록 유지합니다.
+    let currentWasCleared = false;
+    try { currentWasCleared = localStorage.getItem(currentResetStorageKey()) === '1'; } catch {}
+
+    if (currentWasCleared && (!latest || latest.status === 'ended')) {
+      state.event = null;
+      state.awaitingNewEvent = true;
+      return;
+    }
+
+    // 다른 기기에서 새 행사(draft/active)가 생긴 경우에는 자동으로 정상 복귀합니다.
+    if (currentWasCleared && latest && latest.status !== 'ended') {
+      clearCurrentEventCleared();
+    }
+
+    state.event = latest;
 
     try {
       const waitingFor = localStorage.getItem(QR_NEXT_EVENT_KEY);
@@ -1219,6 +1251,7 @@
       state.arrivalQrToken = null;
       state.qrView = 'gathering';
       try { localStorage.removeItem(QR_NEXT_EVENT_KEY); } catch {}
+      clearCurrentEventCleared();
 
       await loadPeople();
       await loadAttendanceLogs();
@@ -2914,7 +2947,7 @@
     const style = document.createElement('style');
     style.textContent = `
       #statusScopeBar{display:flex;gap:7px;overflow-x:auto;padding:0 0 10px;scrollbar-width:none}#statusScopeBar::-webkit-scrollbar{display:none}
-      .status-scope-button{flex:0 0 auto;min-height:38px;border:1px solid #e0e7e8;border-radius:999px;background:#fff;color:#7a868c;padding:0 13px;font-size:12px;font-weight:900}.status-scope-button.active{background:#141a1f;color:#fff;border-color:#141a1f}.status-scope-reset{margin-left:auto;background:#f4f8f8;color:#159f93;border-color:#dcebea}
+      .status-scope-button{flex:0 0 auto;min-height:38px;border:1px solid #e0e7e8;border-radius:999px;background:#fff;color:#7a868c;padding:0 13px;font-size:12px;font-weight:900}.status-scope-button.active{background:#141a1f;color:#fff;border-color:#141a1f}.status-scope-reset{margin-left:auto;background:#fff3f4;color:#d94d55;border-color:#ffd5d8}
       #statusScopeCaption{color:#7f8b90;font-size:11px;font-weight:800;margin:-2px 0 10px}
       #statusDetailStats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0 14px}
       .status-detail-stat{background:#fff;border:1px solid #e8edef;border-radius:18px;padding:14px 15px;box-shadow:0 5px 16px rgba(27,51,58,.04)}
@@ -2941,7 +2974,7 @@
     summary?.insertAdjacentElement('beforebegin', scope);
 
     $$('[data-status-scope]', scope).forEach(button => button.addEventListener('click', () => changeStatusScope(button.dataset.statusScope)));
-    $('#statusScopeReset')?.addEventListener('click', () => changeStatusScope('current'));
+    $('#statusScopeReset')?.addEventListener('click', openStatusResetConfirm);
 
     const detail = document.createElement('div');
     detail.id = 'statusDetailStats';
@@ -2958,6 +2991,238 @@
     history.className = 'status-history-card';
     history.innerHTML = `<div class="status-history-head"><strong id="statusHistoryTitle">출석 기록</strong><small id="statusLogCount">0건</small></div><div id="statusHistoryList"></div>`;
     statusList?.insertAdjacentElement('afterend', history);
+  }
+
+  function ensureStatusResetUI() {
+    if ($('#statusResetFirstDialog') && $('#statusResetFinalDialog')) return;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #statusResetFirstDialog,#statusResetFinalDialog{width:min(calc(100% - 36px),380px);border:0;border-radius:24px;padding:0;background:#fff;box-shadow:0 22px 70px rgba(20,39,45,.25)}
+      #statusResetFirstDialog::backdrop,#statusResetFinalDialog::backdrop{background:rgba(18,26,30,.40);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+      .status-reset-dialog-body{padding:24px 20px 20px;text-align:center}.status-reset-dialog-body h2{font-size:21px;margin:0 0 9px}.status-reset-dialog-body p{margin:0;color:#78858b;font-size:13px;line-height:1.55}
+      .status-reset-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:22px}.status-reset-actions button{height:48px;border:0;border-radius:14px;font-size:16px;font-weight:900}
+      .status-reset-no,.status-reset-cancel{background:#f1f3f4;color:#5f6a6f}.status-reset-yes{background:#20b9aa;color:#fff}.status-reset-delete{background:#e64d56;color:#fff}.status-reset-delete:disabled{opacity:.5}
+      .status-reset-danger{margin-top:14px;padding:14px 13px;border:1px solid #ffd0d4;border-radius:15px;background:#fff4f5;color:#c93f48;text-align:left;font-size:12px;line-height:1.55}.status-reset-danger strong{color:#b72d36}.status-reset-range{margin-top:10px;color:#65747a;font-size:12px;line-height:1.55}
+    `;
+    document.head.appendChild(style);
+
+    const first = document.createElement('dialog');
+    first.id = 'statusResetFirstDialog';
+    first.innerHTML = `
+      <div class="status-reset-dialog-body">
+        <h2>초기화를 진행하시겠습니까?</h2>
+        <p id="statusResetFirstScope">현재 선택한 기간의 자료를 완전히 삭제합니다.</p>
+        <div class="status-reset-actions">
+          <button type="button" class="status-reset-no" id="statusResetNo">아니오</button>
+          <button type="button" class="status-reset-yes" id="statusResetYes">예</button>
+        </div>
+      </div>`;
+    document.body.appendChild(first);
+
+    const finalDialog = document.createElement('dialog');
+    finalDialog.id = 'statusResetFinalDialog';
+    finalDialog.innerHTML = `
+      <div class="status-reset-dialog-body">
+        <h2 style="color:#cf3f48;">⚠️ 완전 삭제 경고</h2>
+        <div class="status-reset-danger" id="statusResetDanger">
+          <strong>이 통계 자료는 삭제 시 복구가 안됩니다.</strong>
+        </div>
+        <div class="status-reset-range" id="statusResetTargetSummary"></div>
+        <div class="status-reset-actions">
+          <button type="button" class="status-reset-cancel" id="statusResetCancel">취소</button>
+          <button type="button" class="status-reset-delete" id="statusResetDelete">완전 삭제</button>
+        </div>
+      </div>`;
+    document.body.appendChild(finalDialog);
+
+    $('#statusResetNo')?.addEventListener('click', () => {
+      state.statusResetContext = null;
+      first.close();
+    });
+    $('#statusResetYes')?.addEventListener('click', async () => {
+      first.close();
+      await prepareStatusResetFinalWarning();
+    });
+    $('#statusResetCancel')?.addEventListener('click', () => {
+      state.statusResetContext = null;
+      finalDialog.close();
+    });
+    $('#statusResetDelete')?.addEventListener('click', executeStatusReset);
+
+    first.addEventListener('cancel', e => {
+      e.preventDefault();
+      state.statusResetContext = null;
+      first.close();
+    });
+    finalDialog.addEventListener('cancel', e => {
+      e.preventDefault();
+      state.statusResetContext = null;
+      finalDialog.close();
+    });
+  }
+
+  function statusResetScopeLabel(scope, targets=[]) {
+    if (scope === 'current') {
+      const e = targets[0] || state.event;
+      return e ? `현재행사 · ${e.event_date || ''} · ${e.title || '행사'}` : '현재행사';
+    }
+    const range = statusScopeRange(scope);
+    if (scope === 'day') return range.caption;
+    if (scope === 'week') return range.caption;
+    if (scope === 'month') return range.caption;
+    return '전체 기간 · 모든 행사';
+  }
+
+  async function fetchStatusResetTargets(scope) {
+    if (!state.member?.organization_id) return [];
+
+    if (scope === 'current') {
+      if (!state.event?.id) return [];
+      const { data, error } = await sb
+        .from('events')
+        .select('id,title,event_date,status')
+        .eq('organization_id', state.member.organization_id)
+        .eq('id', state.event.id)
+        .limit(1);
+      if (error) throw error;
+      return data || [];
+    }
+
+    const range = statusScopeRange(scope);
+    const targets = [];
+    for (let start = 0; ; start += 1000) {
+      let query = sb
+        .from('events')
+        .select('id,title,event_date,status')
+        .eq('organization_id', state.member.organization_id)
+        .order('event_date', { ascending:true })
+        .range(start, start + 999);
+      if (range.start) query = query.gte('event_date', range.start);
+      if (range.end) query = query.lte('event_date', range.end);
+      const { data, error } = await query;
+      if (error) throw error;
+      const rows = data || [];
+      targets.push(...rows);
+      if (rows.length < 1000) break;
+    }
+    return targets;
+  }
+
+  function openStatusResetConfirm() {
+    ensureStatusResetUI();
+    const scope = ['current','day','week','month','all'].includes(state.statusScope) ? state.statusScope : 'current';
+    state.statusResetContext = { scope, targets:[] };
+    const label = $('#statusResetFirstScope');
+    if (label) label.textContent = `${statusResetScopeLabel(scope)} 자료를 완전히 삭제합니다.`;
+    $('#statusResetFirstDialog')?.showModal();
+  }
+
+  async function prepareStatusResetFinalWarning() {
+    const context = state.statusResetContext;
+    if (!context) return;
+
+    const yesButton = $('#statusResetYes');
+    if (yesButton) yesButton.disabled = true;
+    try {
+      const targets = await fetchStatusResetTargets(context.scope);
+      if (!targets.length) {
+        state.statusResetContext = null;
+        toast('선택한 범위에 삭제할 자료가 없습니다.');
+        return;
+      }
+
+      const eventIds = targets.map(row => row.id);
+      const [participantsCount, logsCount, qrCount] = await Promise.all([
+        countRowsForEvents('event_participants', eventIds),
+        countRowsForEvents('attendance_logs', eventIds),
+        countRowsForEvents('qr_tokens', eventIds)
+      ]);
+
+      context.targets = targets;
+      context.counts = { participantsCount, logsCount, qrCount };
+      const danger = $('#statusResetDanger');
+      if (danger) danger.innerHTML = `
+        <strong>이 통계 자료는 삭제 시 복구가 안됩니다.</strong><br>
+        행사 · 참가자 연결 · 출석 기록 · QR 관련 자료가 데이터베이스에서 완전히 삭제됩니다.`;
+      const summary = $('#statusResetTargetSummary');
+      if (summary) summary.innerHTML = `
+        <strong>${escapeHtml(statusResetScopeLabel(context.scope, targets))}</strong><br>
+        삭제 대상: 행사 <strong>${targets.length}건</strong> · 참가자 연결 <strong>${participantsCount}건</strong> · 출석 기록 <strong>${logsCount}건</strong> · QR <strong>${qrCount}건</strong><br>
+        지난 행사 기록에서도 함께 사라집니다.`;
+      $('#statusResetFinalDialog')?.showModal();
+    } catch (error) {
+      console.error('status reset preview error:', error);
+      state.statusResetContext = null;
+      toast(`초기화 대상을 확인하지 못했습니다. · ${error.message || '연결 확인'}`);
+    } finally {
+      if (yesButton) yesButton.disabled = false;
+    }
+  }
+
+  async function executeStatusReset() {
+    const context = state.statusResetContext;
+    const button = $('#statusResetDelete');
+    if (!context || !context.targets?.length || !button) return;
+
+    button.disabled = true;
+    button.textContent = '삭제 중…';
+
+    try {
+      // 두 번째 경고창에서 확인한 정확한 행사 ID만 삭제합니다.
+      // 경고창이 열린 뒤 새 행사가 생겨도 삭제 범위가 갑자기 넓어지지 않습니다.
+      const targets = context.targets.slice();
+      const eventIds = targets.map(row => row.id);
+      const currentDeleted = Boolean(state.event?.id && eventIds.includes(state.event.id));
+      const candidateParticipantIds = await fetchCandidateParticipantIds(eventIds);
+
+      // events 삭제 시 FK CASCADE로 QR/출석/명단 연결/알림 삭제 기록이 함께 정리됩니다.
+      // 삭제 권한이 없을 때 QR만 먼저 폐기되는 부분 성공 상태를 만들지 않기 위해
+      // QR 선행 업데이트 없이 행사 삭제를 먼저 실행합니다.
+      await deleteEventsInBatches(eventIds, { endedOnly:false });
+      const orphanCount = await cleanupOrphanParticipants(candidateParticipantIds);
+
+      if (currentDeleted) {
+        markCurrentEventCleared();
+        clearPopupTimer();
+        notificationState.popupItems = [];
+        notificationState.bellItems = [];
+        notificationState.bellDismissedIds = new Set();
+        notificationState.expanded = false;
+        state.qrToken = null;
+        state.arrivalQrToken = null;
+        state.proxyTokens = [];
+        $('#proxyManagerDialog')?.close?.();
+
+        // 남은 종료 행사는 '이전 행사'로만 보관하고 현재행사 화면에는 다시 올리지 않습니다.
+        await loadLatestEvent();
+        await loadPeople();
+        await loadAttendanceLogs();
+        await refreshBellNotificationsFromServer();
+        await loadGatheringQr();
+        subscribeRealtime();
+      }
+
+      state.historySelectedEvent = null;
+      await loadPastEvents(true).catch(console.error);
+
+      if (state.statusScope === 'current') {
+        state.statusAggregate = null;
+      } else {
+        await loadStatusAggregate(state.statusScope);
+      }
+      renderAll();
+
+      $('#statusResetFinalDialog')?.close();
+      state.statusResetContext = null;
+      toast(`초기화 완료 · 행사 ${targets.length}건 완전 삭제 · 미사용 참가자 ${orphanCount}명 정리`);
+    } catch (error) {
+      console.error('status reset delete error:', error);
+      toast(`초기화 실패 · ${error.message || '권한 또는 연결 확인'}`);
+    } finally {
+      button.disabled = false;
+      button.textContent = '완전 삭제';
+    }
   }
 
   function attendanceActionLabel(action) {
@@ -6281,30 +6546,36 @@
 
   async function fetchCandidateParticipantIds(eventIds) {
     const ids = new Set();
-    for (let start = 0; ; start += 1000) {
-      const { data, error } = await sb
-        .from('event_participants')
-        .select('participant_id')
-        .in('event_id', eventIds)
-        .range(start, start + 999);
-      if (error) throw error;
-      for (const row of data || []) {
-        if (row.participant_id) ids.add(row.participant_id);
+    // 수백~수천 행사를 한 번의 .in()에 넣지 않고 행사 ID도 안전하게 나눕니다.
+    for (let i = 0; i < eventIds.length; i += 80) {
+      const eventBatch = eventIds.slice(i, i + 80);
+      for (let start = 0; ; start += 1000) {
+        const { data, error } = await sb
+          .from('event_participants')
+          .select('participant_id')
+          .in('event_id', eventBatch)
+          .range(start, start + 999);
+        if (error) throw error;
+        for (const row of data || []) {
+          if (row.participant_id) ids.add(row.participant_id);
+        }
+        if (!data || data.length < 1000) break;
       }
-      if (!data || data.length < 1000) break;
     }
     return [...ids];
   }
 
-  async function deleteEventsInBatches(eventIds) {
+  async function deleteEventsInBatches(eventIds, { endedOnly=true }={}) {
     for (let i = 0; i < eventIds.length; i += 80) {
       const batch = eventIds.slice(i, i + 80);
-      const { error } = await sb
+      let query = sb
         .from('events')
         .delete()
         .eq('organization_id', state.member.organization_id)
-        .eq('status', 'ended')
         .in('id', batch);
+      // 기존 지난행사 삭제 기능은 종료 행사만 지우는 안전장치를 그대로 유지합니다.
+      if (endedOnly) query = query.eq('status', 'ended');
+      const { error } = await query;
       if (error) throw error;
     }
   }
@@ -6315,14 +6586,23 @@
 
     for (let i = 0; i < candidateIds.length; i += 80) {
       const batch = candidateIds.slice(i, i + 80);
-      const { data: remainingLinks, error: linkError } = await sb
-        .from('event_participants')
-        .select('participant_id')
-        .in('participant_id', batch)
-        .limit(1000);
-      if (linkError) throw linkError;
+      const used = new Set();
 
-      const used = new Set((remainingLinks || []).map(x => x.participant_id));
+      // 한 참가자가 여러 행사에 연결된 경우 1000행을 넘더라도 끝까지 확인해
+      // 아직 다른 행사에서 사용 중인 참가자를 잘못 삭제하지 않습니다.
+      for (let start = 0; ; start += 1000) {
+        const { data: remainingLinks, error: linkError } = await sb
+          .from('event_participants')
+          .select('participant_id')
+          .in('participant_id', batch)
+          .range(start, start + 999);
+        if (linkError) throw linkError;
+        for (const row of remainingLinks || []) {
+          if (row.participant_id) used.add(row.participant_id);
+        }
+        if (!remainingLinks || remainingLinks.length < 1000) break;
+      }
+
       const orphanIds = batch.filter(id => !used.has(id));
       if (!orphanIds.length) continue;
 
