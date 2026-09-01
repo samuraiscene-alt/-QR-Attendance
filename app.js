@@ -2670,7 +2670,15 @@
     }
 
     const confirmed = window.confirm(`참가자 정보를 수정하시겠습니까?\n\n변경 내용\n${changes.join('\n')}`);
-    if (!confirmed) return;
+    if (!confirmed) {
+      // 확인창에서 취소하면 입력 중이던 임시값도 버리고
+      // 수정창을 실제 저장값으로 즉시 되돌립니다.
+      $('#participantEditName').value = originalName;
+      $('#participantEditOrg').value = originalOrg;
+      $('#participantEditPhone').value = originalPhone;
+      message.textContent = '';
+      return;
+    }
 
     save.disabled = true;
     save.textContent = '저장 중…';
