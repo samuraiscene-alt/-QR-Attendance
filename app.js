@@ -2984,7 +2984,9 @@
   }
 
   function statusScopeRange(scope) {
-    const now = state.event?.event_date ? new Date(`${state.event.event_date}T12:00:00`) : new Date();
+    // 일별/주별/월별 기간 필터는 현재 행사 날짜가 아니라
+    // 사용자가 앱을 보고 있는 실제 오늘 날짜를 기준으로 계산합니다.
+    const now = new Date();
     if (scope === 'day') {
       const key = localDateKey(now); return { start:key, end:key, caption:`오늘 ${key}` };
     }
