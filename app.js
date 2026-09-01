@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.26 · manual duplicate guard + roster search clear button
+  // QR Attendance V36.28 · duplicate guard inline message + iOS search clear
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -1559,6 +1559,46 @@
     }
 
     updateSearchClearButton();
+  }
+
+  function ensurePersonAddMessage() {
+    const form = $('#personForm');
+    const phone = $('#personPhone');
+    if (!form || !phone) return null;
+
+    let message = $('#personAddInlineMessage');
+    if (message) return message;
+
+    message = document.createElement('div');
+    message.id = 'personAddInlineMessage';
+    message.setAttribute('role', 'alert');
+    message.setAttribute('aria-live', 'polite');
+    message.style.cssText = [
+      'display:none',
+      'margin:-2px 2px 14px',
+      'padding:12px 14px',
+      'border:1px solid #ffd3d3',
+      'border-radius:14px',
+      'background:#fff4f4',
+      'color:#e34f55',
+      'font-size:14px',
+      'font-weight:800',
+      'line-height:1.45',
+      'text-align:left'
+    ].join(';');
+
+    const phoneLabel = phone.closest('label');
+    if (phoneLabel) phoneLabel.insertAdjacentElement('afterend', message);
+    else form.insertBefore(message, form.querySelector('button'));
+    return message;
+  }
+
+  function setPersonAddMessage(text = '') {
+    const message = ensurePersonAddMessage();
+    if (!message) return;
+    const value = String(text || '').trim();
+    message.textContent = value;
+    message.style.display = value ? 'block' : 'none';
   }
 
   function formatCheckTime(iso) {
@@ -3181,9 +3221,11 @@
       importPersonKey(person.name, person.phone) === duplicateKey
     );
     if (duplicate) {
-      toast('현재 행사 명단에 같은 이름과 전화번호 뒤 4자리가 이미 있습니다.');
+      setPersonAddMessage('이미 현재 행사 명단에 등록된 참가자입니다.');
       return;
     }
+
+    setPersonAddMessage('');
 
     const { data: participant, error } = await sb
       .from('participants')
@@ -3215,6 +3257,7 @@
       return;
     }
 
+    setPersonAddMessage('');
     $('#personDialog')?.close();
     $('#personForm')?.reset();
 
@@ -3467,18 +3510,27 @@
       updateSearchClearButton();
     });
 
-    $('#addPersonButton')?.addEventListener('click', () =>
-      $('#personDialog')?.showModal()
-    );
+    ensurePersonAddMessage();
+
+    $('#addPersonButton')?.addEventListener('click', () => {
+      setPersonAddMessage('');
+      $('#personDialog')?.showModal();
+    });
 
     $('#personForm')?.addEventListener('submit', addPerson);
+    ['#personName', '#personOrg', '#personPhone'].forEach(selector => {
+      $(selector)?.addEventListener('input', () => setPersonAddMessage(''));
+    });
 
     $('#personDialogClose')?.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      setPersonAddMessage('');
       $('#personForm')?.reset();
       $('#personDialog')?.close();
     });
+
+    $('#personDialog')?.addEventListener('close', () => setPersonAddMessage(''));
 
     $('#manualButton')?.addEventListener('click', () => go('roster'));
     $('#saveSettings')?.addEventListener('click', saveSettings);
