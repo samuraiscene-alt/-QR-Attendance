@@ -2639,6 +2639,20 @@
       return;
     }
 
+    // 수정 시에도 신규 추가와 같은 기준(이름 + 전화번호 뒤 4자리)으로
+    // 현재 행사 명단의 다른 참가자와 중복되는지 확인합니다.
+    // 자기 자신은 중복 판정에서 제외합니다.
+    const linkId = $('#participantEditLinkId').value;
+    const duplicateKey = importPersonKey(name, phone_last4);
+    const duplicate = state.people.some(person =>
+      person.linkId !== linkId &&
+      importPersonKey(person.name, person.phone) === duplicateKey
+    );
+    if (duplicate) {
+      message.textContent = '이미 현재 행사 명단에 등록된 참가자입니다.';
+      return;
+    }
+
     save.disabled = true;
     save.textContent = '저장 중…';
     message.textContent = '';

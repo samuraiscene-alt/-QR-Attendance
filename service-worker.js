@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v36-28-duplicate-inline-20260901';
+const CACHE='qr-attendance-v36-29-edit-duplicate-safe-20260901';
 const ASSETS=[
 './','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./proxy-share-v36-15.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'
