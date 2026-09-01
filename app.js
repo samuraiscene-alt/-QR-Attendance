@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.23 · phone-last4 visibility setting applied to admin roster/history + V36.22 sync feedback preserved
+  // QR Attendance V36.25 · current-password verification required before admin password change
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -496,9 +496,13 @@
       dialog.innerHTML = `
         <form id="changePasswordForm" style="padding:26px 22px;background:#fff;">
           <h2 style="margin:0 0 8px;font-size:24px;">비밀번호 변경</h2>
-          <p style="margin:0 0 20px;color:#7b8590;font-size:14px;">새 관리자 비밀번호를 입력하세요.</p>
+          <p style="margin:0 0 20px;color:#7b8590;font-size:14px;">현재 비밀번호를 확인한 뒤 새 관리자 비밀번호를 설정하세요.</p>
 
-          <label style="display:block;font-weight:800;margin:14px 0 7px;">새 비밀번호</label>
+          <label style="display:block;font-weight:800;margin:14px 0 7px;">현재 비밀번호</label>
+          <input id="settingsCurrentPassword" type="password" autocomplete="current-password" required
+            style="box-sizing:border-box;width:100%;height:52px;border:1px solid #dfe7e9;border-radius:15px;padding:0 14px;font-size:16px;">
+
+          <label style="display:block;font-weight:800;margin:16px 0 7px;">새 비밀번호</label>
           <input id="settingsNewPassword" type="password" autocomplete="new-password" minlength="8" required
             style="box-sizing:border-box;width:100%;height:52px;border:1px solid #dfe7e9;border-radius:15px;padding:0 14px;font-size:16px;">
 
@@ -527,6 +531,7 @@
   async function savePasswordFromSettings(e) {
     e.preventDefault();
 
+    const currentPassword = $('#settingsCurrentPassword').value;
     const p1 = $('#settingsNewPassword').value;
     const p2 = $('#settingsNewPasswordConfirm').value;
     const message = $('#settingsPasswordMessage');
@@ -534,6 +539,11 @@
 
     message.style.color = '#e44c51';
     message.textContent = '';
+
+    if (!currentPassword) {
+      message.textContent = '현재 비밀번호를 입력해주세요.';
+      return;
+    }
 
     if (p1.length < 8) {
       message.textContent = '비밀번호는 8자 이상으로 입력해주세요.';
@@ -545,7 +555,38 @@
       return;
     }
 
+    if (currentPassword === p1) {
+      message.textContent = '새 비밀번호는 현재 비밀번호와 다르게 입력해주세요.';
+      return;
+    }
+
+    const email = state.user?.email;
+    if (!email || !sb) {
+      message.textContent = '관리자 계정 정보를 확인하지 못했습니다. 다시 로그인해주세요.';
+      return;
+    }
+
     button.disabled = true;
+    button.textContent = '현재 비밀번호 확인 중…';
+
+    // Supabase updateUser()는 로그인 세션만 있으면 비밀번호 변경이 가능하므로,
+    // 설정 화면에서는 현재 비밀번호로 한 번 더 인증한 뒤에만 변경을 허용합니다.
+    const { error: verifyError } = await sb.auth.signInWithPassword({
+      email,
+      password: currentPassword
+    });
+
+    if (verifyError) {
+      console.error('current password verify failed:', verifyError);
+      button.disabled = false;
+      button.textContent = '비밀번호 저장';
+      const errorText = String(verifyError.message || '').toLowerCase();
+      message.textContent = errorText.includes('invalid login credentials')
+        ? '현재 비밀번호가 올바르지 않습니다.'
+        : '현재 비밀번호 확인에 실패했습니다. 연결 상태를 확인하고 다시 시도해주세요.';
+      return;
+    }
+
     button.textContent = '저장 중…';
 
     const { error } = await sb.auth.updateUser({ password: p1 });
@@ -560,7 +601,7 @@
     }
 
     message.style.color = '#159f93';
-    message.textContent = '비밀번호가 변경되었습니다.';
+    message.textContent = '현재 비밀번호 확인 완료 · 새 비밀번호로 변경되었습니다.';
     toast('비밀번호 변경 완료');
 
     setTimeout(() => $('#changePasswordDialog')?.close(), 900);
