@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v36-31-edit-cancel-restore-20260901';
+const CACHE='qr-attendance-v36-32-edit-cancel-ios-restore-20260901';
 const ASSETS=[
 './','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./proxy-share-v36-15.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'

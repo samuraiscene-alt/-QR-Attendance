@@ -2671,12 +2671,22 @@
 
     const confirmed = window.confirm(`참가자 정보를 수정하시겠습니까?\n\n변경 내용\n${changes.join('\n')}`);
     if (!confirmed) {
-      // 확인창에서 취소하면 입력 중이던 임시값도 버리고
-      // 수정창을 실제 저장값으로 즉시 되돌립니다.
-      $('#participantEditName').value = originalName;
-      $('#participantEditOrg').value = originalOrg;
-      $('#participantEditPhone').value = originalPhone;
-      message.textContent = '';
+      // iPhone Safari/PWA에서는 native confirm이 닫힌 직후
+      // 포커스가 있던 input의 화면값을 한 번 더 복원하는 경우가 있어
+      // 즉시 복원 + 다음 프레임/짧은 지연 후 재복원으로 확실히 되돌립니다.
+      const restoreOriginalEditValues = () => {
+        $('#participantEditName').value = originalName;
+        $('#participantEditOrg').value = originalOrg;
+        $('#participantEditPhone').value = originalPhone;
+        message.textContent = '';
+      };
+
+      document.activeElement?.blur?.();
+      restoreOriginalEditValues();
+      requestAnimationFrame(() => {
+        restoreOriginalEditValues();
+        setTimeout(restoreOriginalEditValues, 80);
+      });
       return;
     }
 
