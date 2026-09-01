@@ -1485,7 +1485,13 @@
     const button = $('#searchClearButton');
     if (!input || !button) return;
     const hasText = Boolean(input.value);
-    button.hidden = !hasText;
+
+    // iPhone Safari에서 input이 버튼 위를 덮는 경우가 있어 hidden 속성 대신
+    // inline display + 높은 z-index로 표시 상태를 강제합니다.
+    button.style.display = hasText ? 'flex' : 'none';
+    button.style.visibility = hasText ? 'visible' : 'hidden';
+    button.style.opacity = hasText ? '1' : '0';
+    button.style.pointerEvents = hasText ? 'auto' : 'none';
     button.setAttribute('aria-hidden', hasText ? 'false' : 'true');
   }
 
@@ -1494,13 +1500,40 @@
     const box = input?.closest('.search-box');
     if (!input || !box) return;
 
-    if (!$('#searchClearButton')) {
-      const button = document.createElement('button');
+    // 기존 검색창의 레이아웃은 유지하면서 X 버튼이 항상 input보다 위에 오도록 강제합니다.
+    box.style.position = 'relative';
+    box.style.overflow = 'visible';
+    input.style.paddingRight = '64px';
+
+    let button = $('#searchClearButton');
+    if (!button) {
+      button = document.createElement('button');
       button.type = 'button';
       button.id = 'searchClearButton';
       button.className = 'search-clear-button';
       button.setAttribute('aria-label', '검색어 지우기');
       button.innerHTML = '<span aria-hidden="true">×</span>';
+      button.style.cssText = [
+        'position:absolute',
+        'right:12px',
+        'top:50%',
+        'transform:translateY(-50%)',
+        'z-index:50',
+        'width:36px',
+        'height:36px',
+        'border:0',
+        'border-radius:999px',
+        'align-items:center',
+        'justify-content:center',
+        'background:#eef2f2',
+        'color:#687278',
+        'font-size:28px',
+        'font-weight:700',
+        'line-height:1',
+        'padding:0',
+        'cursor:pointer',
+        '-webkit-tap-highlight-color:transparent'
+      ].join(';');
       box.appendChild(button);
 
       button.addEventListener('click', event => {
@@ -1518,18 +1551,9 @@
       const style = document.createElement('style');
       style.id = 'searchClearButtonStyle';
       style.textContent = `
-        .search-box{position:relative;}
-        .search-box #searchInput{padding-right:58px;}
-        .search-box input[type="search"]::-webkit-search-cancel-button{display:none;}
-        .search-clear-button{
-          position:absolute;right:12px;top:50%;transform:translateY(-50%);
-          width:36px;height:36px;border:0;border-radius:999px;
-          display:flex;align-items:center;justify-content:center;
-          background:#eef3f3;color:#7e888d;font-size:29px;font-weight:500;
-          line-height:1;padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent;
-        }
-        .search-clear-button[hidden]{display:none!important;}
-        .search-clear-button:active{transform:translateY(-50%) scale(.94);}
+        .search-box input[type="search"]::-webkit-search-cancel-button{display:none!important;}
+        #searchClearButton{z-index:50!important;}
+        #searchClearButton:active{transform:translateY(-50%) scale(.94)!important;}
       `;
       document.head.appendChild(style);
     }
