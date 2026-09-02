@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.41 · roster delete orphan participant cleanup
+  // QR Attendance V36.42 · organization-scoped Google Sheets connection status
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -5546,6 +5546,9 @@
       .sheet-connected{
         color:#159f93;background:#e6f8f5;border-radius:999px;padding:5px 8px;font-size:10px;font-weight:900;
       }
+      .sheet-connected.checking{color:#7b878d;background:#eef2f3}
+      .sheet-connected.disconnected{color:#b26d12;background:#fff3df}
+      .sheet-direct-actions button:disabled{opacity:.48;color:#7f8d92;background:#f5f7f8;cursor:not-allowed}
       .sheet-direct-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
       .sheet-direct-actions button{
         min-height:48px;border:0;border-radius:14px;background:#fff;color:#159f93;
@@ -5657,11 +5660,11 @@
         <div class="sheet-direct-box">
           <div class="sheet-direct-head">
             <strong>Google Sheets 직접 연동</strong>
-            <span class="sheet-connected">연결됨</span>
+            <span class="sheet-connected checking" id="googleSheetsConnectionBadge">확인 중…</span>
           </div>
           <div class="sheet-direct-actions">
-            <button type="button" id="googleSheetsImportButton">명단입력 가져오기</button>
-            <button type="button" id="googleSheetsSyncButton">현재행사 지금 동기화</button>
+            <button type="button" id="googleSheetsImportButton" disabled>명단입력 가져오기</button>
+            <button type="button" id="googleSheetsSyncButton" disabled>현재행사 지금 동기화</button>
           </div>
           <div id="googleSheetsSyncStatus" class="sheet-sync-status" role="status" aria-live="polite" hidden></div>
           <div class="sheet-direct-note">
@@ -5732,6 +5735,51 @@
     $('#spreadsheetTemplateButton')?.addEventListener('click', exportSpreadsheetTemplate);
   }
 
+  async function refreshGoogleSheetsConnectionUI() {
+    const badge = $('#googleSheetsConnectionBadge');
+    const importButton = $('#googleSheetsImportButton');
+    const syncButton = $('#googleSheetsSyncButton');
+    const status = $('#googleSheetsSyncStatus');
+
+    if (badge) {
+      badge.className = 'sheet-connected checking';
+      badge.textContent = '확인 중…';
+    }
+    if (importButton) importButton.disabled = true;
+    if (syncButton) syncButton.disabled = true;
+
+    try {
+      const data = await invokeGoogleSheets('status');
+      const configured = data?.configured === true;
+
+      if (badge) {
+        badge.className = `sheet-connected${configured ? '' : ' disconnected'}`;
+        badge.textContent = configured ? '연결됨' : '미연결';
+      }
+      if (importButton) importButton.disabled = !configured;
+      if (syncButton) syncButton.disabled = !configured;
+
+      if (!configured && status) {
+        status.hidden = false;
+        status.className = 'sheet-sync-status loading';
+        status.textContent = '이 기관에는 Google Sheets가 연결되어 있지 않습니다.';
+      }
+      return configured;
+    } catch (error) {
+      console.error('google sheets status error:', error);
+      if (badge) {
+        badge.className = 'sheet-connected disconnected';
+        badge.textContent = '확인 실패';
+      }
+      if (status) {
+        status.hidden = false;
+        status.className = 'sheet-sync-status error';
+        status.textContent = 'Google Sheets 연결 상태를 확인하지 못했습니다.';
+      }
+      return false;
+    }
+  }
+
   async function manualGoogleSheetsCurrentSync() {
     const button = $('#googleSheetsSyncButton');
     const status = $('#googleSheetsSyncStatus');
@@ -5771,6 +5819,7 @@
       syncStatus.textContent = '';
     }
     $('#spreadsheetDialog')?.showModal();
+    refreshGoogleSheetsConnectionUI().catch(console.error);
   }
 
   function resetSpreadsheetPreview() {
