@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.38 · secure logout credential + session isolation reset
+  // QR Attendance V36.39 · offline startup dependency cache + automatic recovery
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -480,6 +480,15 @@
       queueGoogleSheetsCurrentSync(500);
     } catch (e) {
       console.error(e);
+      if (!navigator.onLine) {
+        showLogin();
+        const message = $('#authMessage');
+        if (message) {
+          message.style.color = '#e59a25';
+          message.textContent = '오프라인 상태입니다. 인터넷 연결 후 자동으로 다시 연결합니다.';
+        }
+        return;
+      }
       toast('관리자 데이터 연결을 확인해주세요.');
     }
   }
@@ -6860,8 +6869,27 @@
       if (document.visibilityState === 'visible') refreshAfterAppResume();
     });
 
+    // 오프라인 상태에서 앱을 새로 연 경우 CDN/DB 연결이 복구되는 즉시
+    // 세션을 다시 읽고 현재 기관 데이터를 새로 불러오도록 재시작합니다.
+    window.addEventListener('online', () => {
+      if (!sb || !state.member) {
+        location.reload();
+        return;
+      }
+      refreshAfterAppResume();
+    });
+
     if (!sb) {
-      $('#authMessage').textContent = 'Supabase 연결 설정을 확인해주세요.';
+      const message = $('#authMessage');
+      if (message) {
+        if (!navigator.onLine) {
+          message.style.color = '#e59a25';
+          message.textContent = '오프라인 상태입니다. 인터넷 연결 후 자동으로 다시 연결합니다.';
+        } else {
+          message.style.color = '#e44c51';
+          message.textContent = 'Supabase 연결 설정을 확인해주세요.';
+        }
+      }
       return;
     }
 

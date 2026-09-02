@@ -1,11 +1,13 @@
-const CACHE='qr-attendance-v36-38-secure-logout-20260902';
+const CACHE='qr-attendance-v36-39-offline-startup-20260902';
 const ASSETS=[
 './','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./proxy-share-v36-15.js','./manifest.json','./supabase-config.js',
-'./icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'
+'./icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png',
+'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2',
+'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'
 ];
 
-// iPhone Safari/PWA가 이전 HTTP 캐시의 app.js를 다시 쓰는 문제를 막기 위해
-// 설치 시 핵심 파일을 반드시 네트워크에서 새로 받아 캐시에 저장합니다.
+// iPhone Safari/PWA가 이전 HTTP 캐시의 app.js를 다시 쓰는 문제를 막고,
+// 오프라인 재실행 시 필요한 외부 라이브러리도 함께 캐시에 보관합니다.
 self.addEventListener('install', event => {
   self.skipWaiting();
   event.waitUntil((async () => {
@@ -14,9 +16,11 @@ self.addEventListener('install', event => {
       try {
         const request = new Request(url, { cache: 'reload' });
         const response = await fetch(request);
-        if (response && response.ok) await cache.put(url, response.clone());
+        if (response && (response.ok || response.type === 'opaque')) {
+          await cache.put(request, response.clone());
+        }
       } catch (_) {
-        // 설치 중 일부 파일을 못 받아도 기존 앱 자체가 중단되지 않도록 둡니다.
+        // 일부 외부 자산을 못 받아도 설치 자체는 중단하지 않습니다.
       }
     }));
   })());
@@ -33,15 +37,15 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
   const url = event.request.url;
-  if (url.includes('supabase.co') || url.includes('cdn.jsdelivr.net')) return;
 
-  // 온라인일 때는 브라우저 HTTP 캐시를 우회해 항상 최신 GitHub Pages 파일을 확인하고,
-  // 네트워크가 끊겼을 때만 서비스워커 캐시를 사용합니다.
+  // Supabase 데이터 API 요청 자체는 절대로 캐시하지 않습니다.
+  if (url.includes('supabase.co')) return;
+
   event.respondWith((async () => {
     try {
       const freshRequest = new Request(event.request, { cache: 'no-store' });
       const response = await fetch(freshRequest);
-      if (response && response.ok) {
+      if (response && (response.ok || response.type === 'opaque')) {
         const cache = await caches.open(CACHE);
         await cache.put(event.request, response.clone());
       }
@@ -49,7 +53,13 @@ self.addEventListener('fetch', event => {
     } catch (_) {
       const cached = await caches.match(event.request);
       if (cached) return cached;
-      return caches.match('./index.html');
+
+      // 외부 스크립트 요청에 index.html을 돌려주면 JS 파싱 오류가 생기므로
+      // 같은 출처의 화면 이동 요청에만 앱 셸을 대체 응답으로 사용합니다.
+      if (event.request.mode === 'navigate') {
+        return caches.match('./index.html');
+      }
+      throw _;
     }
   })());
 });
