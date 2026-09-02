@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.37 · hard reset Google Sheets delete sync
+  // QR Attendance V36.38 · secure logout credential + session isolation reset
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -210,7 +210,26 @@
     $('#recoveryForm').addEventListener('submit', updatePassword);
   }
 
+  function clearLoginFields() {
+    const form = $('#loginForm');
+    if (form) form.reset();
+
+    const email = $('#loginEmail');
+    const password = $('#loginPassword');
+    const message = $('#authMessage');
+
+    if (email) email.value = '';
+    if (password) password.value = '';
+    if (message) {
+      message.textContent = '';
+      message.style.color = '';
+    }
+  }
+
   function showLogin() {
+    // 로그아웃 뒤 직전 계정의 이메일/비밀번호가 DOM에 남지 않도록
+    // 로그인 화면을 열 때마다 앱이 가진 입력값을 명시적으로 비웁니다.
+    clearLoginFields();
     $('#passwordRecoveryGate').hidden = true;
     $('#authGate').hidden = false;
   }
@@ -323,18 +342,103 @@
     }, 700);
   }
 
-  async function logout() {
-    if (sb) await sb.auth.signOut();
+  async function resetSessionWorkspace() {
+    clearTimeout(googleSheetsSyncTimer);
+    googleSheetsSyncTimer = null;
+
+    const activeChannel = state.channel;
+    state.channel = null;
+    if (activeChannel && sb) {
+      try { await sb.removeChannel(activeChannel); }
+      catch (error) { console.warn('realtime cleanup skipped:', error); }
+    }
+
+    // 계정 전환 시 이전 기관의 화면/메모리 상태가 다음 계정으로 이어지지 않도록
+    // 모든 기관별 런타임 데이터를 비웁니다. 서버 데이터는 건드리지 않습니다.
+    state.member = null;
+    state.organization = null;
+    state.event = null;
+    state.people = [];
+    state.logs = [];
+    state.historyEvents = [];
+    state.historyOffset = 0;
+    state.historyHasMore = false;
+    state.historySelectedEvent = null;
+    state.historyDeleteContext = null;
+    state.spreadsheetRows = [];
+    state.spreadsheetFileName = '';
+    state.ocrRows = [];
+    state.ocrRawText = '';
+    state.ocrFileName = '';
+    state.filter = 'all';
+    state.search = '';
+    state.qrToken = null;
+    state.arrivalQrToken = null;
+    state.qrView = 'gathering';
+    state.previousEvent = null;
+    state.awaitingNewEvent = false;
+    state.rosterSelectMode = false;
+    state.rosterSelectedIds = [];
+    state.proxyTokens = [];
+    state.statusScope = 'current';
+    state.statusAggregate = null;
+    state.statusLoading = false;
+    state.statusResetContext = null;
+
+    // dialog은 브라우저 top-layer에 올라가므로 로그인 가림막보다 위에 남을 수 있습니다.
+    // 로그아웃 순간 모두 닫아 이전 기관 상세/QR이 노출되지 않게 합니다.
+    document.querySelectorAll('dialog[open]').forEach(dialog => {
+      try { dialog.close(); } catch {}
+    });
+
+    clearPopupTimer();
+    notificationState.popupItems = [];
+    notificationState.bellItems = [];
+    notificationState.bellDismissedIds = new Set();
+    notificationState.bellSyncBusy = false;
+    notificationState.freshPopupId = null;
+    notificationState.eventId = null;
+    notificationState.expanded = false;
+    renderNotificationCenter();
+    updateNotificationBellState();
   }
 
-  async function onSession(session) {
-    state.user = session?.user || null;
-
-    if (!state.user) {
+  async function logout() {
+    if (!sb) {
+      await resetSessionWorkspace();
+      state.user = null;
       showLogin();
       return;
     }
 
+    const { error } = await sb.auth.signOut();
+    if (error) {
+      console.error('logout error:', error);
+      toast('로그아웃에 실패했습니다. 연결 상태를 확인해주세요.');
+      return;
+    }
+
+    await resetSessionWorkspace();
+    state.user = null;
+    showLogin();
+  }
+
+  async function onSession(session) {
+    const nextUser = session?.user || null;
+    const previousUserId = state.user?.id || null;
+
+    if (!nextUser) {
+      await resetSessionWorkspace();
+      state.user = null;
+      showLogin();
+      return;
+    }
+
+    if (previousUserId && previousUserId !== nextUser.id) {
+      await resetSessionWorkspace();
+    }
+
+    state.user = nextUser;
     hideLogin();
     await loadWorkspace();
   }
