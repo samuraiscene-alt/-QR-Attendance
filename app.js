@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.36 · full orphan participant cleanup after hard reset
+  // QR Attendance V36.37 · hard reset Google Sheets delete sync
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -3183,6 +3183,19 @@
       await deleteEventsInBatches(eventIds, { endedOnly:false });
       const orphanCount = await cleanupAllOrphanParticipants();
 
+      // Supabase 삭제가 확정된 동일 행사 ID를 Google Sheets에도 전달해
+      // 현재행사/행사기록의 해당 행사 행만 함께 제거합니다.
+      // Sheets 장애가 Supabase 삭제 완료 상태를 되돌릴 수는 없으므로
+      // 별도 결과로 기록하고 사용자에게 명확히 알립니다.
+      let sheetsDeleteResult = null;
+      let sheetsDeleteError = null;
+      try {
+        sheetsDeleteResult = await invokeGoogleSheets('deleteEvents', { eventIds });
+      } catch (error) {
+        sheetsDeleteError = error;
+        console.error('google sheets reset delete sync error:', error);
+      }
+
       if (currentDeleted) {
         markCurrentEventCleared();
         clearPopupTimer();
@@ -3216,7 +3229,12 @@
 
       $('#statusResetFinalDialog')?.close();
       state.statusResetContext = null;
-      toast(`초기화 완료 · 행사 ${targets.length}건 완전 삭제 · 미사용 참가자 ${orphanCount}명 정리`);
+      if (sheetsDeleteResult) {
+        const sheetRows = Number(sheetsDeleteResult.currentDeleted || 0) + Number(sheetsDeleteResult.historyDeleted || 0);
+        toast(`초기화 완료 · 행사 ${targets.length}건 완전 삭제 · 미사용 참가자 ${orphanCount}명 정리 · Sheets ${sheetRows}행 삭제`);
+      } else {
+        toast(`초기화 완료 · 행사 ${targets.length}건 완전 삭제 · Google Sheets 삭제 동기화 실패${sheetsDeleteError?.message ? ` · ${sheetsDeleteError.message}` : ''}`);
+      }
     } catch (error) {
       console.error('status reset delete error:', error);
       toast(`초기화 실패 · ${error.message || '권한 또는 연결 확인'}`);
