@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // QR Attendance V36.40 · iOS offline startup recovery watchdog
+  // QR Attendance V36.41 · roster delete orphan participant cleanup
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -2906,6 +2906,9 @@
     const name = $('#participantEditName').value.trim() || '참가자';
     if (!linkId || !state.event) return;
 
+    const target = state.people.find(person => person.linkId === linkId);
+    const participantId = target?.participantId || $('#participantEditParticipantId').value || '';
+
     const ok = window.confirm(`${name}님을 현재 행사 명단에서 삭제하시겠습니까?\n이전 행사 기록에는 영향을 주지 않습니다.`);
     if (!ok) return;
 
@@ -2926,6 +2929,16 @@
       console.error('participant unlink error:', error);
       $('#participantEditMessage').textContent = `삭제 실패 · ${error.message || '확인 필요'}`;
       return;
+    }
+
+    // 다른 행사에서 더 이상 사용되지 않는 참가자 마스터 행만 정리합니다.
+    // 과거/다른 행사에 연결된 참가자는 그대로 남겨 기록을 보존합니다.
+    if (participantId) {
+      try {
+        await cleanupOrphanParticipants([participantId]);
+      } catch (cleanupError) {
+        console.error('participant orphan cleanup error:', cleanupError);
+      }
     }
 
     await loadPeople();
@@ -3012,6 +3025,12 @@
   async function deleteSelectedRosterPeople() {
     if (!state.event || !state.rosterSelectedIds.length) return;
     const ids = [...state.rosterSelectedIds];
+    const selectedLinkIds = new Set(ids);
+    const participantIds = state.people
+      .filter(person => selectedLinkIds.has(person.linkId))
+      .map(person => person.participantId)
+      .filter(Boolean);
+
     if (!window.confirm(`선택한 ${ids.length}명을 현재 행사 명단에서 삭제하시겠습니까?\n지난 행사 기록에는 영향을 주지 않습니다.`)) return;
 
     const button = $('#rosterBulkDelete');
@@ -3025,6 +3044,11 @@
           .in('id', ids.slice(i, i + 100));
         if (error) throw error;
       }
+
+      if (participantIds.length) {
+        await cleanupOrphanParticipants(participantIds);
+      }
+
       state.rosterSelectedIds = [];
       state.rosterSelectMode = false;
       await loadPeople();
