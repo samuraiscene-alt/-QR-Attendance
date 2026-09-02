@@ -1,12 +1,15 @@
 (() => {
   'use strict';
-  // QR Attendance V36.39 · offline startup dependency cache + automatic recovery
+  // QR Attendance V36.40 · iOS offline startup recovery watchdog
 
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
   const toastEl = $('#toast');
   let toastTimer;
   let googleSheetsSyncTimer = null;
+  let offlineRecoveryTimer = null;
+  let offlineRecoveryInFlight = false;
+  let offlineRecoveryNeeded = false;
 
   const toast = (msg) => {
     if (!toastEl) return;
@@ -404,6 +407,8 @@
   }
 
   async function logout() {
+    stopOfflineRecoveryWatch();
+
     if (!sb) {
       await resetSessionWorkspace();
       state.user = null;
@@ -428,6 +433,7 @@
     const previousUserId = state.user?.id || null;
 
     if (!nextUser) {
+      stopOfflineRecoveryWatch();
       await resetSessionWorkspace();
       state.user = null;
       showLogin();
@@ -439,8 +445,37 @@
     }
 
     state.user = nextUser;
-    hideLogin();
-    await loadWorkspace();
+
+    // 실제 기관 데이터까지 읽힌 뒤에만 로그인 화면을 닫습니다.
+    // 오프라인 시작 실패 때 기본 HTML의 샘플 데이터가 노출되는 것을 막습니다.
+    const workspace = await loadWorkspace();
+    if (workspace?.ok) {
+      hideLogin();
+      return;
+    }
+
+    showLogin();
+    const message = $('#authMessage');
+    if (message) {
+      if (workspace?.recoverable) {
+        message.style.color = '#e59a25';
+        message.textContent = '인터넷 연결을 확인해주세요. 연결되면 자동으로 다시 연결합니다.';
+      } else {
+        message.style.color = '#e44c51';
+        message.textContent = '관리자 데이터 연결을 확인해주세요.';
+      }
+    }
+  }
+
+  function isLikelyNetworkError(error) {
+    const text = [
+      error?.message,
+      error?.details,
+      error?.hint,
+      error?.name,
+      String(error || '')
+    ].filter(Boolean).join(' ');
+    return /failed to fetch|load failed|network|offline|internet|connection.*failed|fetch failed/i.test(text);
   }
 
   async function loadWorkspace() {
@@ -478,18 +513,18 @@
       recoverMissedQrNotifications();
       updateNotificationBellState();
       queueGoogleSheetsCurrentSync(500);
+      stopOfflineRecoveryWatch();
+      return { ok: true, recoverable: false };
     } catch (e) {
       console.error(e);
-      if (!navigator.onLine) {
-        showLogin();
-        const message = $('#authMessage');
-        if (message) {
-          message.style.color = '#e59a25';
-          message.textContent = '오프라인 상태입니다. 인터넷 연결 후 자동으로 다시 연결합니다.';
-        }
-        return;
+      const recoverable = isLikelyNetworkError(e);
+      if (recoverable) {
+        startOfflineRecoveryWatch();
+      } else {
+        stopOfflineRecoveryWatch();
+        toast('관리자 데이터 연결을 확인해주세요.');
       }
-      toast('관리자 데이터 연결을 확인해주세요.');
+      return { ok: false, recoverable };
     }
   }
 
@@ -6832,6 +6867,45 @@
     }[c]));
   }
 
+  function stopOfflineRecoveryWatch() {
+    if (offlineRecoveryTimer) {
+      clearInterval(offlineRecoveryTimer);
+      offlineRecoveryTimer = null;
+    }
+    offlineRecoveryInFlight = false;
+    offlineRecoveryNeeded = false;
+  }
+
+  async function probeRealNetwork() {
+    // navigator.onLine은 iOS에서 비행기 모드 직후에도 true로 남을 수 있어
+    // 실제 네트워크 요청 성공 여부로 복구 가능 상태를 확인합니다.
+    const probeUrl = `./index.html?__qr_network_probe=${Date.now()}`;
+    const response = await fetch(probeUrl, { cache: 'no-store' });
+    return Boolean(response);
+  }
+
+  async function attemptOfflineStartupRecovery() {
+    if (!offlineRecoveryNeeded || offlineRecoveryInFlight) return;
+    offlineRecoveryInFlight = true;
+    try {
+      await probeRealNetwork();
+      // 외부 Supabase 라이브러리가 오프라인 시작 시 로드되지 못한 경우
+      // 연결 복구 뒤 현재 문서를 다시 읽어 정상 초기화합니다.
+      location.reload();
+    } catch (_) {
+      // 아직 실제 인터넷 연결이 없으면 다음 검사까지 대기합니다.
+    } finally {
+      offlineRecoveryInFlight = false;
+    }
+  }
+
+  function startOfflineRecoveryWatch() {
+    offlineRecoveryNeeded = true;
+    if (offlineRecoveryTimer) return;
+    offlineRecoveryTimer = setInterval(attemptOfflineStartupRecovery, 3500);
+    window.addEventListener('focus', attemptOfflineStartupRecovery);
+  }
+
   async function init() {
     ensureLoginUI();
     ensureEventRegistrationUI();
@@ -6854,7 +6928,8 @@
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
-        refreshAfterAppResume();
+        if (offlineRecoveryNeeded) attemptOfflineStartupRecovery();
+        else refreshAfterAppResume();
       } else {
         // 팝업은 화면에서만 쓰는 실시간 알림이므로 앱이 가려지면 비웁니다.
         // 종 보관함은 그대로 유지되며, 놓친 QR 변화는 복귀 시 recoverMissedQrNotifications()가 채웁니다.
@@ -6866,32 +6941,40 @@
     });
 
     window.addEventListener('pageshow', () => {
-      if (document.visibilityState === 'visible') refreshAfterAppResume();
-    });
-
-    // 오프라인 상태에서 앱을 새로 연 경우 CDN/DB 연결이 복구되는 즉시
-    // 세션을 다시 읽고 현재 기관 데이터를 새로 불러오도록 재시작합니다.
-    window.addEventListener('online', () => {
-      if (!sb || !state.member) {
-        location.reload();
+      if (document.visibilityState !== 'visible') return;
+      if (offlineRecoveryNeeded) {
+        attemptOfflineStartupRecovery();
         return;
       }
       refreshAfterAppResume();
     });
 
+    // iOS의 navigator.onLine 값만 믿지 않고 실제 네트워크 프로브와 함께 복구합니다.
+    window.addEventListener('online', () => {
+      if (offlineRecoveryNeeded) {
+        attemptOfflineStartupRecovery();
+        return;
+      }
+      refreshAfterAppResume();
+    });
+
+    // 의존성 로드가 실패한 상태에서도 서비스워커 업데이트는 계속 등록합니다.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./service-worker.js').catch(console.error);
+    }
+
     if (!sb) {
       const message = $('#authMessage');
       if (message) {
-        if (!navigator.onLine) {
-          message.style.color = '#e59a25';
-          message.textContent = '오프라인 상태입니다. 인터넷 연결 후 자동으로 다시 연결합니다.';
-        } else {
-          message.style.color = '#e44c51';
-          message.textContent = 'Supabase 연결 설정을 확인해주세요.';
-        }
+        message.style.color = '#e59a25';
+        message.textContent = '인터넷 연결을 확인해주세요. 연결되면 자동으로 다시 연결합니다.';
       }
+      startOfflineRecoveryWatch();
+      attemptOfflineStartupRecovery();
       return;
     }
+
+    stopOfflineRecoveryWatch();
 
     const { data } = await sb.auth.getSession();
 
@@ -6912,10 +6995,6 @@
       }
       setTimeout(() => onSession(session), 0);
     });
-
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./service-worker.js').catch(console.error);
-    }
   }
 
   document.addEventListener('DOMContentLoaded', init);

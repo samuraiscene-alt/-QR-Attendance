@@ -1,4 +1,4 @@
-const CACHE='qr-attendance-v36-39-offline-startup-20260902';
+const CACHE='qr-attendance-v36-40-offline-recovery-watchdog-20260902';
 const ASSETS=[
 './','./index.html','./checkin.html','./proxy.html','./style.css','./app.js','./proxy-share-v36-15.js','./manifest.json','./supabase-config.js',
 './icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png',
@@ -8,6 +8,7 @@ const ASSETS=[
 
 // iPhone Safari/PWA가 이전 HTTP 캐시의 app.js를 다시 쓰는 문제를 막고,
 // 오프라인 재실행 시 필요한 외부 라이브러리도 함께 캐시에 보관합니다.
+// V36.40에서는 앱 자체가 실제 네트워크 복구를 감지해 자동 재초기화합니다.
 self.addEventListener('install', event => {
   self.skipWaiting();
   event.waitUntil((async () => {
