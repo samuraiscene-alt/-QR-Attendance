@@ -2,11 +2,15 @@
   "name": "QR 자동 출석부",
   "short_name": "출석 체크",
   "description": "행사별 QR 출석과 모바일 명단 관리를 위한 PWA",
+  "id": "./",
   "start_url": "./",
+  "scope": "./",
   "display": "standalone",
+  "display_override": ["standalone"],
   "background_color": "#f5f9fa",
   "theme_color": "#f7fbfb",
   "lang": "ko-KR",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "icons/icon-192.png",
